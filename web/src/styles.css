@@ -1805,3 +1805,91 @@ input[type='checkbox'] {
   background: none;
   font-size: 15px;
 }
+
+/* ------------------------------ mobile tweaks ------------------------------ */
+@media (max-width: 1000px) {
+  .status-col .status-list {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 6px;
+    padding-bottom: 6px;
+    align-items: center;
+    -webkit-overflow-scrolling: touch;
+  }
+  .status-col .status-list > div {
+    display: contents;
+  }
+  .status-col .status-row,
+  .status-col .status-group-title {
+    white-space: nowrap;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 12px;
+    height: 34px;
+    flex-shrink: 0;
+  }
+  .status-col .status-row.active {
+    border-color: var(--blue);
+    background: var(--blue-light);
+  }
+  .status-col .status-sep {
+    display: none;
+  }
+  .status-col .status-footer {
+    flex-shrink: 0;
+  }
+  .page-title {
+    flex-wrap: wrap;
+    gap: 6px 14px;
+  }
+}
+@media (max-width: 700px) {
+  .quick-access,
+  .topbar-right .bell,
+  .topbar-right > a.icon-btn {
+    display: none;
+  }
+  .searchbox-input {
+    height: 42px;
+  }
+  .avatar {
+    width: 36px;
+    height: 36px;
+    font-size: 15px;
+  }
+  .page-title {
+    font-size: 21px;
+  }
+  .page-head .btn-outline-blue {
+    height: 40px;
+    font-size: 14px;
+  }
+  .pager {
+    margin-left: 0;
+  }
+  .kv {
+    grid-template-columns: 120px minmax(0, 1fr);
+  }
+  .paid-row {
+    flex-wrap: wrap;
+    padding: 10px 14px;
+  }
+  .edit-payment {
+    margin-left: 0;
+    padding: 6px 12px;
+  }
+}
+.searchbox {
+  min-width: 0;
+}
+.topbar-right {
+  flex-shrink: 0;
+}
+@media (max-width: 1000px) {
+  .status-col .status-row.all {
+    padding: 4px 12px;
+    font-size: 14.5px;
+  }
+}
