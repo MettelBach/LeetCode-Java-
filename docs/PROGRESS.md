@@ -8,6 +8,23 @@
 3. После завершения приложения — детальный план рекламы через **Google Ads и Meta Ads** (docs/MARKETING_PLAN.md).
 4. Вести заметки в файлах (этот файл), коммитить и пушить в `claude/upbeat-darwin-kpx1l0`.
 
+## Доп. требования (сообщение пользователя №2)
+- Нужен **прод-продукт** (SaaS), а не демо.
+- **Склады и каталоги** как в BaseLinker: несколько каталогов (Katalogi), несколько складов (Magazyny) с остатками по складам, складские документы (PZ, PW, WZ, RW, MM).
+- Заказы и **фильтры как в BaseLinker** (есть: колонка статусов, расширенный поиск).
+- **Pomoc i kontakt**: база знаний + форма обращения → тикет, переписка с поддержкой.
+- **Панель поддержки и администратора**: список аккаунтов клиентов, статистика, вход поддержки в аккаунт клиента (impersonation с аудитом), очередь тикетов — взять тикет, ответить, решить; управление сотрудниками.
+- **Zarządzaj ofertami**: менеджер офферов — выставление товаров со склада на Allegro/Empik/Kaufland, завершение/активация, массовое редактирование цен/остатков.
+- **Akceleracje** (раздел в Integracje): платное ускорение синхронизаций — частота остатков (8ч→1ч→5мин), цен (24ч→12ч→4ч→5мин), загрузки заказов (10мин→1мин), лимит API; посуточная оплата.
+- **Integracje**: каталог интеграций с выбором для подключения (как в BaseLinker).
+- Не забыть: план рекламы Google Ads + Meta Ads, финальный QA (баги, логика, UX, дизайн, безопасность).
+
+## Архитектура мультиаккаунтности (решение)
+- `data/platform.db` — платформа: accounts (клиенты/тенанты, план, статус, триал), users (пользователи клиентов), staff (поддержка/админы), tickets + ticket_messages, audit_log, billing (начисления akceleracji/подписки).
+- `data/tenants/<account_id>.db` — отдельная SQLite БД на каждого клиента (полная изоляция данных).
+- `db` в server/src/db/index.ts — Proxy поверх AsyncLocalStorage: в контексте запроса/фоновой задачи указывает на БД текущего тенанта. Код сервисов не меняется.
+- JWT: {typ:'user', sub, acc} / {typ:'staff', sub} / impersonation {typ:'user', acc, sub, imp: staffId}.
+
 ## Стек
 - `server/` — Node 22 + Express 5 + TypeScript + better-sqlite3 (SQLite), JWT-аутентификация, pdfkit (PDF фактур/этикеток), node-cron (синхронизация), nodemailer (письма).
 - `web/` — React 19 + Vite + TypeScript + React Router + TanStack Query + Recharts. Свой CSS, повторяющий BaseLinker.
@@ -49,12 +66,15 @@
 Каждая интеграция имеет **демо-режим** (генерация реалистичных заказов/офферов без ключей).
 
 ## Модули (план) и статус
-- [ ] Каркас монорепо
-- [ ] Бэкенд: БД, auth, заказы, статусы, товары/склад, фактуры, отправки, возвраты, автоматические действия, дашборд, настройки
-- [ ] Интеграции Allegro / Empik / Kaufland + планировщик синхронизации
+- [x] Каркас монорепо
+- [x] Бэкенд: БД, auth, заказы, статусы, товары/склад, фактуры, отправки, возвраты, автоматические действия, дашборд, настройки (server/src, smoke-тест API пройден)
+- [x] Интеграции Allegro / Empik / Kaufland + планировщик синхронизации (server/src/integrations; демо-режим работает)
 - [ ] Фронтенд всех модулей, i18n (pl/en/ru)
 - [ ] Тесты, скриншоты, Docker, README
 - [ ] План рекламы Google Ads + Meta Ads
 
 ## Журнал
 - 2026-10-04: исследование дизайна и API, очистка репозитория, установка зависимостей.
+- 2026-10-04: бэкенд готов и закоммичен (c2079b1). Структура server/src: db/ (schema, seed), services/ (orders, order-query, stock, invoices, pdf, shipments, returns, email, automation, events, demo-seed), integrations/ (allegro, empik, kaufland, demo, sync), routes/ (auth, orders, statuses, products, integrations+offers, documents=shipments/invoices/returns, misc=rules/dashboard/settings/search/public).
+  Запуск API: `cd server && DB_FILE=... PORT=3001 npx tsx src/index.ts`. Setup: POST /api/auth/setup {email,name,password,demo:true}.
+  Следующий шаг: фронтенд (web/).
