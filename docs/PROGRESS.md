@@ -86,3 +86,12 @@
   Следующий шаг: фронтенд — Login/Register/Forgot/Reset, App-роутер, Settings, Help (Pomoc i kontakt + тикеты), Admin-панель (/admin/*), склады/каталоги/документы UI, менеджер офферов UI, Akceleracje UI, каталог интеграций, подписка; i18n pl/ru.
 - 2026-10-04: фронтенд SaaS готов (auth, /admin, help, склады, офферы, акселерации, настройки, подписка), переводы PL/RU (web/src/i18n, проверка `npm run i18n:check`), Docker/README. Скриншоты сверены.
   Следующие шаги: (1) docs/MARKETING_PLAN.md — Google Ads + Meta Ads; (2) финальный QA + security review; (3) поиск доработок (публичный API с токенами — нужен для акселерации «лимит API», и др.).
+
+## Маркетинг — собранные данные (для docs/MARKETING_PLAN.md)
+- Рынок: Allegro — >130 тыс. активных польских продавцов 3P (прогноз 140 тыс. в 2025), 22 млн+ покупателей, GMV >15 млрд EUR (zunapro.com, wiadomoscihandlowe.pl). Allegro ~70–80% объёма маркетплейсов PL.
+- Конкуренты BaseLinker: Apilo, Sellasist (WMS дешевле), IDEAerp; продавцы жалуются на ежегодный рост цен BaseLinker и дорогой тариф Enterprise (spolecznosc.allegro.pl, тема «alternatywa dla BaseLinker»). → УТП: прозрачная цена, оплата за дни акселераций, нет навязанного Enterprise.
+- Google Ads B2B SaaS 2026 (saashero.net, tripledart, prosemedia): структура — Brand (exact, 10–15% бюджета), Competitor (exact+phrase, 15–20%), Category high intent (phrase+broad, 30–40%), Category broad (15–20%), Demand Gen/YouTube (10–15%), PMax только при 100+ конверсиях/мес. Меньше кампаний = лучше Smart Bidding. QS 5→8 снижает CPC на ~28%. Обязателен импорт офлайн-конверсий (платящий клиент).
+- EU: Consent Mode v2 обязателен для показа рекламы и измерения в ЕЭЗ; с 21.07.2025 без него конверсии/ремаркетинг в ЕС не работают (до 60% потерь данных).
+- Товарные знаки конкурентов: Google в ЕС не запрещает ключевые слова с чужим брендом; в тексте объявления использовать чужой бренд нельзя без риска (CJEU — нарушение при введении в заблуждение).
+- Meta B2B SaaS: воронка — охват → лид-магнит (CPL на 40–60% ниже, чем прямой оффер) → прямой отклик/ретаргет. Advantage+ работает для ретаргетинга и lookalike по списку клиентов, хуже для холодного точного B2B (CPL ниже на 14%, но cost per MQL ~2x). Регистрация на триал = событие Lead через Pixel + Conversions API. CPM Meta в 2–3 раза ниже LinkedIn.
+- Средний CPC B2B ~2–5 USD (общие данные), для PL точные данные — через Keyword Planner.
