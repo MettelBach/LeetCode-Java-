@@ -11,7 +11,7 @@ interface Client {
 }
 
 /** Enable / disable two-factor authentication (TOTP) for the signed-in user. */
-export default function TwoFactorCard({ client, base, disabled }: { client: Client; base: string; disabled?: boolean }) {
+export default function TwoFactorCard({ client, base, disabled, onToken }: { client: Client; base: string; disabled?: boolean; onToken: (token: string) => void }) {
   const t = useT();
   const run = useAction();
   const qc = useQueryClient();
@@ -74,8 +74,10 @@ export default function TwoFactorCard({ client, base, disabled }: { client: Clie
                 className="btn btn-primary"
                 disabled={code.length !== 6}
                 onClick={async () => {
-                  const r = await run(() => client.post(`${base}/enable`, { code }), t('Two-factor authentication enabled'));
+                  const r = await run(() => client.post<{ token?: string }>(`${base}/enable`, { code }), t('Two-factor authentication enabled'));
                   if (r) {
+                    // Other sessions were ended; keep this one with the new token.
+                    if (r.token) onToken(r.token);
                     setSetup(null);
                     refresh();
                   }

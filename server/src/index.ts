@@ -10,8 +10,9 @@ if (process.env.NODE_ENV === 'production' && (config.jwtSecret === 'dev-secret-c
   process.exit(1);
 }
 
-if (process.env.NODE_ENV === 'production' && !process.env.SECRETS_KEY) {
-  console.warn('[security] SECRETS_KEY is not set — marketplace credentials are encrypted with a key derived from JWT_SECRET');
+if (process.env.NODE_ENV === 'production' && (process.env.SECRETS_KEY ?? '').length < 32) {
+  console.error('SECRETS_KEY must be set to a random string of at least 32 characters in production (openssl rand -hex 32) and never changed');
+  process.exit(1);
 }
 
 initPlatform(config.dataDir);

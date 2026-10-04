@@ -165,12 +165,18 @@ export const ATTRIBUTION_KEYS = [
   'first_seen',
 ] as const;
 
+const CLICK_IDS = new Set(['gclid', 'gbraid', 'wbraid', 'fbclid', 'fbp', 'fbc']);
+
 export function cleanAttribution(raw: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (!raw || typeof raw !== 'object') return out;
   for (const k of ATTRIBUTION_KEYS) {
     const v = (raw as Record<string, unknown>)[k];
-    if (typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, 500);
+    if (typeof v !== 'string') continue;
+    // No control characters anywhere; click IDs are plain tokens.
+    let clean = v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 500);
+    if (CLICK_IDS.has(k) && !/^[A-Za-z0-9_\-.]+$/.test(clean)) clean = '';
+    if (clean) out[k] = clean;
   }
   return out;
 }

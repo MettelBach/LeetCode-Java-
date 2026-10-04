@@ -846,7 +846,7 @@ function AccountTab() {
         </div>
       </div>
     </div>
-    <TwoFactorCard client={api} base="/auth/2fa" disabled={!!user?.impersonator} />
+    <TwoFactorCard client={api} base="/auth/2fa" disabled={!!user?.impersonator} onToken={setToken} />
     </>
   );
 }

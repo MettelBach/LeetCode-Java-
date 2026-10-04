@@ -50,7 +50,7 @@ adminRouter.get('/me', (req, res) => {
   res.json(req.staff);
 });
 
-adminRouter.use('/me/2fa', twoFactorRouter('staff', (req) => req.staff?.id));
+adminRouter.use('/me/2fa', twoFactorRouter('staff', (req) => req.staff?.id, (id) => signStaff(platformDb.prepare('SELECT id, token_version FROM staff WHERE id = ?').get(id) as any)));
 
 adminRouter.put('/me/password', (req, res) => {
   const b = z.object({ current_password: z.string(), new_password: passwordSchema }).parse(req.body);
@@ -167,8 +167,8 @@ adminRouter.get('/conversions.csv', (req, res) => {
     )
     .all(`-${days} days`) as { id: number; attribution: string; created_at: string; amount: number }[];
   const cell = (v: string | number) => {
-    const s = String(v).replace(/^[=+\-@]/, "'$&");
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    const s = String(v).replace(/[\u0000-\u001f\u007f]/g, '').replace(/^[=+\-@]/, "'$&");
+    return /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = ['Parameters:TimeZone=+0000', 'Google Click ID,GBRAID,WBRAID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency'];
   for (const r of rows) {

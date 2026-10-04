@@ -1044,7 +1044,7 @@ export function AdminStaff() {
           <button className="btn btn-primary" onClick={() => run(() => adminApi.put('/me/password', pwd), t('Password changed')).then(() => setPwd({ current_password: '', new_password: '' }))}>
             {t('Save')}
           </button>
-          <TwoFactorCard client={adminApi} base="/me/2fa" />
+          <TwoFactorCard client={adminApi} base="/me/2fa" onToken={setStaffToken} />
         </div>
       </div>
       {adding && (

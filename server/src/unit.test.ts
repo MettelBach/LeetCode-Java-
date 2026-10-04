@@ -200,6 +200,8 @@ describe('TOTP', () => {
     expect(verifyTotp(secret, totpCode(secret, step - 2), 0, now)).toBeNull();
     expect(verifyTotp(secret, totpCode(secret, step), step, now)).toBeNull();
     expect(verifyTotp(secret, 'abc', 0, now)).toBeNull();
+    // An unreadable (empty) secret never validates, even with the "empty key" code.
+    expect(verifyTotp('', totpCode('', step), 0, now)).toBeNull();
   });
 });
 

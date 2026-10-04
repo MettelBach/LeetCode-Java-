@@ -252,15 +252,15 @@ describe('SaaS flow', () => {
   it('stores sign-up attribution and exports Google Ads conversions', async () => {
     const r = await call('POST', '/auth/register', {
       company: 'Sklep Ads', name: 'Celina', email: 'ads@c.pl', password: 'password3', accept_terms: true,
-      attribution: { utm_source: 'google', utm_medium: 'cpc', gclid: 'Cj0KTEST', evil: 'x' },
+      attribution: { utm_source: 'google', utm_medium: 'cpc\r=1+1', gclid: 'Cj0KTEST', fbclid: 'x\r=HYPERLINK("a")', evil: 'x' },
     });
     expect(r.status).toBe(200);
     const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
     const list = await call('GET', '/admin/accounts?search=Sklep Ads', undefined, login.data.token);
     const acc = list.data.rows[0];
-    expect(acc.source).toBe('google / cpc');
+    expect(acc.source).toBe('google / cpc=1+1');
     const detail = await call('GET', `/admin/accounts/${acc.id}`, undefined, login.data.token);
-    expect(detail.data.attribution).toEqual({ utm_source: 'google', utm_medium: 'cpc', gclid: 'Cj0KTEST' });
+    expect(detail.data.attribution).toEqual({ utm_source: 'google', utm_medium: 'cpc=1+1', gclid: 'Cj0KTEST' });
     await call('POST', `/admin/accounts/${acc.id}/payments`, { amount: 99, extend_days: 30 }, login.data.token);
     const csv = await call('GET', '/admin/conversions.csv', undefined, login.data.token);
     expect(csv.status).toBe(200);
@@ -333,8 +333,11 @@ describe('SaaS flow', () => {
     expect(setup.data.otpauth).toContain('otpauth://totp/');
     expect((await call('POST', '/auth/2fa/enable', { code: '000000' }, t)).status).toBe(400);
     const step = currentStep();
-    expect((await call('POST', '/auth/2fa/enable', { code: totpCode(setup.data.secret, step) }, t)).status).toBe(200);
-    expect((await call('GET', '/auth/2fa', undefined, t)).data.enabled).toBe(true);
+    const enabled = await call('POST', '/auth/2fa/enable', { code: totpCode(setup.data.secret, step) }, t);
+    expect(enabled.status).toBe(200);
+    // Sessions from before 2FA are ended; the new token works.
+    expect((await call('GET', '/auth/2fa', undefined, t)).status).toBe(401);
+    expect((await call('GET', '/auth/2fa', undefined, enabled.data.token)).data.enabled).toBe(true);
 
     const noCode = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
     expect(noCode.data).toEqual({ two_factor_required: true });

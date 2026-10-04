@@ -270,7 +270,11 @@ authRouter.put('/me', requireAuth, (req, res) => {
   res.json({ ...out, ...(token ? { token } : {}) });
 });
 
-authRouter.use('/2fa', requireAuth, twoFactorRouter('users', (req) => req.user?.id));
+authRouter.use(
+  '/2fa',
+  requireAuth,
+  twoFactorRouter('users', (req) => req.user?.id, (id) => signUser(platformDb.prepare('SELECT id, account_id, token_version FROM users WHERE id = ?').get(id) as any)),
+);
 
 /** Logs out on all devices. */
 authRouter.post('/logout-all', requireAuth, (req, res) => {

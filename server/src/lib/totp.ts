@@ -54,6 +54,8 @@ export function totpCode(secret: string, step: number): string {
  */
 export function verifyTotp(secret: string, code: string, lastStep = 0, now = Date.now()): number | null {
   const c = String(code ?? '').replace(/\s/g, '');
+  // An empty or unreadable secret must never validate (HMAC with an empty key is predictable).
+  if (base32Decode(secret ?? '').length < 10) return null;
   if (!/^\d{6}$/.test(c)) return null;
   const step = currentStep(now);
   for (const s of [step - 1, step, step + 1]) {

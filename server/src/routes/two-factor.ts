@@ -31,7 +31,13 @@ const secretOf = (r: Row) => openJson<{ s?: string }>(r.totp_secret, {}).s ?? ''
 export function checkSecondFactor(table: Table, id: number, code: string): boolean {
   const r = load(table, id);
   if (!r?.totp_enabled) return true;
-  const step = verifyTotp(secretOf(r), code, r.totp_last_step);
+  const secret = secretOf(r);
+  if (!secret) {
+    // Fail closed: 2FA is on but the secret cannot be read (e.g. SECRETS_KEY changed).
+    console.error(`[2fa] cannot read the TOTP secret of ${table} #${id} — reset 2FA for this login`);
+    return false;
+  }
+  const step = verifyTotp(secret, code, r.totp_last_step);
   if (step === null) return false;
   platformDb.prepare(`UPDATE ${table} SET totp_last_step = ? WHERE id = ?`).run(step, id);
   return true;
@@ -41,7 +47,8 @@ export function resetSecondFactor(table: Table, id: number) {
   platformDb.prepare(`UPDATE ${table} SET totp_secret = NULL, totp_enabled = 0, totp_last_step = 0 WHERE id = ?`).run(id);
 }
 
-export function twoFactorRouter(table: Table, who: (req: Request) => number | undefined) {
+/** `reissue` returns a fresh session token after other sessions were revoked. */
+export function twoFactorRouter(table: Table, who: (req: Request) => number | undefined, reissue: (id: number) => string) {
   const r = Router();
   const me = (req: Request) => {
     if (table === 'users' && req.impersonator) throw new HttpError(403, 'Support cannot change two-factor authentication of the client');
@@ -70,8 +77,9 @@ export function twoFactorRouter(table: Table, who: (req: Request) => number | un
     if (!secret) throw new HttpError(400, 'Start the setup first');
     const step = verifyTotp(secret, b.code, row.totp_last_step);
     if (step === null) throw new HttpError(400, 'Invalid two-factor code');
-    platformDb.prepare(`UPDATE ${table} SET totp_enabled = 1, totp_last_step = ? WHERE id = ?`).run(step, row.id);
-    res.json({ enabled: true });
+    // Sessions opened before 2FA was turned on are ended; the caller gets a new token.
+    platformDb.prepare(`UPDATE ${table} SET totp_enabled = 1, totp_last_step = ?, token_version = token_version + 1 WHERE id = ?`).run(step, row.id);
+    res.json({ enabled: true, token: reissue(row.id) });
   });
 
   r.post('/disable', (req, res) => {
