@@ -38,6 +38,12 @@ export interface IntegrationSettings {
   stock_warehouse_ids?: number[];
   /** Catalog used for automatic linking and listing. */
   catalog_id?: number | null;
+  /** Marketplace price = inventory price × (1 + markup %) + add, then rounding. */
+  price_markup_percent?: number;
+  price_add?: number;
+  price_rounding?: 'none' | '99' | 'int';
+  /** Units kept back from the marketplace (sent stock = stock − reserve). */
+  stock_reserve?: number;
   [k: string]: unknown;
 }
 

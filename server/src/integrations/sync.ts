@@ -173,12 +173,26 @@ export async function syncOffers(id: number) {
 }
 
 /** Stock of a product as seen by an integration (all warehouses or the selected ones). */
-function offerStock(productId: number, warehouseIds: number[] | undefined): number {
+export function offerStock(productId: number, warehouseIds: number[] | undefined): number {
   if (!warehouseIds?.length) return (db.prepare('SELECT stock FROM products WHERE id = ?').get(productId) as { stock: number } | undefined)?.stock ?? 0;
   const r = db
     .prepare(`SELECT COALESCE(SUM(stock), 0) s FROM product_stock WHERE product_id = ? AND warehouse_id IN (${warehouseIds.map(() => '?').join(',')})`)
     .get(productId, ...warehouseIds) as { s: number };
   return r.s;
+}
+
+/** Price sent to a marketplace, after the integration's price rules. */
+export function marketplacePrice(base: number, s: IntegrationSettings): number {
+  let v = base * (1 + (Number(s.price_markup_percent) || 0) / 100) + (Number(s.price_add) || 0);
+  if (s.price_rounding === 'int') v = Math.round(v);
+  // "Psychological" prices: 45.30 → 45.99.
+  else if (s.price_rounding === '99') v = Math.floor(v + 0.001) + 0.99;
+  return Math.max(0, Math.round(v * 100) / 100);
+}
+
+/** Stock sent to a marketplace, after the reserve kept for other channels. */
+export function marketplaceStock(stock: number, s: IntegrationSettings): number {
+  return Math.max(0, stock - Math.max(0, Number(s.stock_reserve) || 0));
 }
 
 /**
@@ -205,10 +219,11 @@ export async function pushOffers(
     if (!integration.enabled || off.status === 'ended') continue;
     const p = db.prepare('SELECT price FROM products WHERE id = ?').get(off.product_id) as { price: number } | undefined;
     if (!p) continue;
-    const stock = Math.max(0, offerStock(off.product_id, integration.settings.stock_warehouse_ids as number[] | undefined));
+    const stock = marketplaceStock(offerStock(off.product_id, integration.settings.stock_warehouse_ids as number[] | undefined), integration.settings);
+    const price = marketplacePrice(p.price, integration.settings);
     const change: { stock?: number; price?: number } = {};
     if (doStock && integration.settings.sync_stock && off.sync_stock && (opts.force || stock !== off.stock)) change.stock = stock;
-    if (doPrice && integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(p.price - off.price) > 0.001)) change.price = p.price;
+    if (doPrice && integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(price - off.price) > 0.001)) change.price = price;
     if (change.stock === undefined && change.price === undefined) continue;
     // Mirakl (Empik) needs both values in one update.
     if (integration.type === 'empik') {

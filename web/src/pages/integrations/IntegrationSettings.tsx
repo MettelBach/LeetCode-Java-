@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink, KeyRound, PlugZap, RefreshCw, Save, Trash2, Undo2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../../api';
 import { Empty, Field, Loading, MarketplaceLogo, Switch, Tabs, useAction, useConfirm, useToast } from '../../components/ui';
 import { useInvalidateOrders, useStatuses, type Integration } from '../../data';
@@ -34,7 +34,8 @@ export default function IntegrationSettings() {
   const qc = useQueryClient();
   const run = useAction();
   const confirm = useConfirm();
-  const [tab, setTab] = useState<Tab>('connection');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'connection');
   const q = useQuery({ queryKey: ['integration', id], queryFn: () => api.get<Integration>(`/integrations/${id}`) });
   const meta = useQuery({ queryKey: ['integrations-meta'], queryFn: () => api.get<any>('/integrations/meta'), staleTime: Infinity });
   const refresh = () => {
@@ -413,7 +414,22 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
   const toast = useToast();
   const warehouses = useWarehouses();
   const catalogs = useCatalogs();
-  const [s, setS] = useState<Record<string, any>>({ ...i.settings, stock_warehouse_ids: i.settings.stock_warehouse_ids ?? [] });
+  const [s, setS] = useState<Record<string, any>>({
+    ...i.settings,
+    stock_warehouse_ids: i.settings.stock_warehouse_ids ?? [],
+    price_markup_percent: String(i.settings.price_markup_percent ?? 0),
+    price_add: String(i.settings.price_add ?? 0),
+    price_rounding: i.settings.price_rounding ?? 'none',
+    stock_reserve: String(i.settings.stock_reserve ?? 0),
+  });
+  const num = (v: string) => Number(String(v).replace(',', '.')) || 0;
+  // Preview of the price rules for 100.00 in the inventory.
+  const preview = (() => {
+    let v = 100 * (1 + num(s.price_markup_percent) / 100) + num(s.price_add);
+    if (s.price_rounding === 'int') v = Math.round(v);
+    else if (s.price_rounding === '99') v = Math.floor(v + 0.001) + 0.99;
+    return Math.max(0, v);
+  })();
   const save = async () => {
     const r = await run(
       () =>
@@ -424,6 +440,10 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
             auto_link: !!s.auto_link,
             catalog_id: s.catalog_id ? Number(s.catalog_id) : null,
             stock_warehouse_ids: s.stock_warehouse_ids,
+            price_markup_percent: num(s.price_markup_percent),
+            price_add: num(s.price_add),
+            price_rounding: s.price_rounding,
+            stock_reserve: Math.max(0, Math.round(num(s.stock_reserve))),
           },
         }),
       t('Saved'),
@@ -471,6 +491,27 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
             ))}
             <span className="help-text">{t('None selected = sum of all warehouses')}</span>
           </div>
+        </Field>
+      </div>
+      <div className="card-title mt mb" style={{ fontSize: 16 }}>
+        {t('Price rules and stock reserve')}
+      </div>
+      <div className="form-grid">
+        <Field label={t('Price change vs inventory (%)')} help={t('e.g. 15 to cover the marketplace commission')}>
+          <input className="input" value={s.price_markup_percent} onChange={(e) => setS({ ...s, price_markup_percent: e.target.value })} inputMode="decimal" />
+        </Field>
+        <Field label={t('Add to the price (PLN)')}>
+          <input className="input" value={s.price_add} onChange={(e) => setS({ ...s, price_add: e.target.value })} inputMode="decimal" />
+        </Field>
+        <Field label={t('Rounding')} help={t('100.00 in the inventory → {p} on the marketplace', { p: preview.toFixed(2) })}>
+          <select className="select" value={s.price_rounding} onChange={(e) => setS({ ...s, price_rounding: e.target.value })}>
+            <option value="none">{t('No rounding')}</option>
+            <option value="99">{t('Up to .99 (e.g. 45.99)')}</option>
+            <option value="int">{t('To whole złoty')}</option>
+          </select>
+        </Field>
+        <Field label={t('Stock reserve (units)')} help={t('Units kept back from this marketplace, e.g. for the own store')}>
+          <input className="input" value={s.stock_reserve} onChange={(e) => setS({ ...s, stock_reserve: e.target.value })} inputMode="numeric" />
         </Field>
       </div>
       <div className="row mt">

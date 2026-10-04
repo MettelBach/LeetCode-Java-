@@ -14,7 +14,6 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
   const qc = useQueryClient();
   const integrations = useIntegrations();
   const [integrationId, setIntegrationId] = useState<number | null>(null);
-  const [markup, setMarkup] = useState('0');
   const [shipping, setShipping] = useState('');
   const [category, setCategory] = useState('');
   const [handling, setHandling] = useState('1');
@@ -34,7 +33,6 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
       api.post('/offers/list', {
         integration_id: integrationId,
         product_ids: productIds,
-        price_markup: Number(markup.replace(',', '.')) || 0,
         shipping_rates_id: shipping || undefined,
         category_id: category || undefined,
         handling_time: Number(handling) || undefined,
@@ -116,8 +114,11 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
               <Field label={t('Offer title')} help={t('{name} — product name, {sku} — SKU')}>
                 <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
               </Field>
-              <Field label={t('Price change vs inventory (%)')} help={t('e.g. 10 = 10% higher than the inventory price')}>
-                <input className="input" value={markup} onChange={(e) => setMarkup(e.target.value)} inputMode="decimal" />
+              <Field label={t('Price and stock')}>
+                <div className="help-text" style={{ paddingTop: 8 }}>
+                  {t('Calculated from the inventory using the price rules and stock reserve of this integration.')}{' '}
+                  <Link to={`/integrations/${integration.id}?tab=products`}>{t('Change')}</Link>
+                </div>
               </Field>
               {integration.type === 'allegro' && (
                 <>

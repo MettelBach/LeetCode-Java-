@@ -6,6 +6,7 @@ import { dueMessage } from './services/lifecycle-mail.js';
 import { openJson, sealJson } from './lib/secrets.js';
 import { base32Decode, base32Encode, totpCode, verifyTotp } from './lib/totp.js';
 import { backupAll } from './services/backup.js';
+import { marketplacePrice, marketplaceStock } from './integrations/sync.js';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -199,5 +200,17 @@ describe('TOTP', () => {
     expect(verifyTotp(secret, totpCode(secret, step - 2), 0, now)).toBeNull();
     expect(verifyTotp(secret, totpCode(secret, step), step, now)).toBeNull();
     expect(verifyTotp(secret, 'abc', 0, now)).toBeNull();
+  });
+});
+
+describe('marketplace price rules', () => {
+  it('applies markup, add-on, rounding and stock reserve', () => {
+    expect(marketplacePrice(100, {})).toBe(100);
+    expect(marketplacePrice(100, { price_markup_percent: 15 })).toBe(115);
+    expect(marketplacePrice(40, { price_markup_percent: 10, price_add: 1.3, price_rounding: '99' })).toBe(45.99);
+    expect(marketplacePrice(45, { price_rounding: '99' })).toBe(45.99);
+    expect(marketplacePrice(45.5, { price_rounding: 'int' })).toBe(46);
+    expect(marketplaceStock(10, { stock_reserve: 3 })).toBe(7);
+    expect(marketplaceStock(2, { stock_reserve: 3 })).toBe(0);
   });
 });

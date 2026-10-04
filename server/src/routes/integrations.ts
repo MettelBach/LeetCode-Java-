@@ -9,6 +9,9 @@ import {
   connectorFor,
   DEFAULT_SETTINGS,
   loadIntegration,
+  marketplacePrice,
+  marketplaceStock,
+  offerStock,
   pushOffers,
   saveState,
   sendTrackingToSource,
@@ -94,6 +97,10 @@ const settingsSchema = z
     warehouse_id: z.number().int().nullable(),
     stock_warehouse_ids: z.array(z.number().int()),
     catalog_id: z.number().int().nullable(),
+    price_markup_percent: z.number().min(-90).max(500),
+    price_add: z.number().min(-10000).max(10000),
+    price_rounding: z.enum(['none', '99', 'int']),
+    stock_reserve: z.number().int().min(0).max(100000),
   })
   .partial();
 
@@ -367,7 +374,6 @@ offersRouter.post('/list', async (req, res) => {
     .object({
       integration_id: z.number().int(),
       product_ids: z.array(z.number().int()).min(1).max(500),
-      price_markup: z.number().min(-90).max(500).optional(),
       shipping_rates_id: z.string().max(100).optional(),
       category_id: z.string().max(50).optional(),
       handling_time: z.number().int().min(0).max(60).optional(),
@@ -393,7 +399,7 @@ offersRouter.post('/list', async (req, res) => {
       results.push({ product_id: pid, ok: false, error: `Already listed (${existing.external_id})` });
       continue;
     }
-    const price = Math.round(p.price * (1 + (b.price_markup ?? 0) / 100) * 100) / 100;
+    const price = marketplacePrice(p.price, integration.settings);
     const title = (b.title_template || '{name}').replace('{name}', p.name).replace('{sku}', p.sku).slice(0, 200);
     try {
       const o = await connector.createOffer({
@@ -403,7 +409,7 @@ offersRouter.post('/list', async (req, res) => {
         description: p.description,
         price,
         currency: 'PLN',
-        stock: Math.max(0, p.stock),
+        stock: marketplaceStock(offerStock(p.id, integration.settings.stock_warehouse_ids as number[] | undefined), integration.settings),
         images: parseJson<string[]>(p.images, []),
         category_id: b.category_id,
         shipping_rates_id: b.shipping_rates_id,
