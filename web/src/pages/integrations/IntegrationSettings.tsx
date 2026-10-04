@@ -271,7 +271,7 @@ function ConnectionTab({ i, onSaved }: { i: Integration; onSaved: () => void }) 
             <li>{t('Requests are signed with HMAC-SHA256 — make sure the server clock is correct.')}</li>
           </ol>
         )}
-        <p className="help-text">{t('Orders are downloaded automatically every 5 minutes; offers once an hour.')}</p>
+        <p className="help-text">{t('Orders are downloaded automatically every 10 minutes (faster with Accelerations); offers are refreshed every 6 hours.')}</p>
       </div>
     </div>
   );
@@ -438,7 +438,7 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
           <Switch checked={!!s.auto_link} onChange={(v) => setS({ ...s, auto_link: v })} /> {t('Link offers with inventory products automatically (by SKU / EAN)')}
         </label>
         <label className="check-label">
-          <Switch checked={!!s.sync_stock} onChange={(v) => setS({ ...s, sync_stock: v })} /> {t('Send inventory stock to linked offers (after every stock change)')}
+          <Switch checked={!!s.sync_stock} onChange={(v) => setS({ ...s, sync_stock: v })} /> {t('Send inventory stock to linked offers (interval set in Accelerations)')}
         </label>
         <label className="check-label">
           <Switch checked={!!s.sync_price} onChange={(v) => setS({ ...s, sync_price: v })} /> {t('Send inventory prices to linked offers')}

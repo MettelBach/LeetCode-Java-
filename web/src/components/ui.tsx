@@ -146,6 +146,7 @@ export function useToast() {
 /** Wraps an async action: shows an error toast on failure. */
 export function useAction() {
   const toast = useToast();
+  const t = useT();
   return useCallback(
     async <T,>(fn: () => Promise<T>, success?: string): Promise<T | undefined> => {
       try {
@@ -153,11 +154,11 @@ export function useAction() {
         if (success) toast(success, 'success');
         return r;
       } catch (e: any) {
-        toast(e?.message ?? String(e), 'error');
+        toast(t(e?.message ?? String(e)), 'error');
         return undefined;
       }
     },
-    [toast],
+    [toast, t],
   );
 }
 
