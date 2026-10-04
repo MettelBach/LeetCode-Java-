@@ -93,6 +93,38 @@ await step('warehouse document PZ', async () => {
   await page.getByText('Document confirmed — stock updated').waitFor();
 });
 
+await step('packing station: scan all products of an order', async () => {
+  await page.goto(`${base}/orders/packing`);
+  const box = page.getByLabel('Scan EAN or SKU…');
+  await box.waitFor();
+  await box.fill('NO-SUCH-CODE');
+  await box.press('Enter');
+  await page.getByText('Code NO-SUCH-CODE is not in this order').waitFor();
+  const rows = page.locator('.tbl tbody tr');
+  const n = await rows.count();
+  for (let i = 0; i < n; i++) {
+    const sku = ((await rows.nth(i).locator('.text-muted').innerText()).match(/SKU: ([^ ·]+)/) || [])[1];
+    const need = Number((await rows.nth(i).locator('td').nth(3).innerText()).split('/')[1]);
+    for (let k = 0; k < need; k++) {
+      await box.fill(sku);
+      await box.press('Enter');
+    }
+  }
+  await page.getByRole('button', { name: 'Order packed' }).click();
+  await page.getByText('Order packed', { exact: true }).last().waitFor();
+});
+
+await step('API token: generate and call the REST API', async () => {
+  await page.goto(`${base}/settings/api`);
+  await page.getByRole('button', { name: 'Generate token' }).first().click();
+  await page.locator('.modal input').fill('E2E');
+  await page.locator('.modal').getByRole('button', { name: 'Generate', exact: true }).click();
+  const token = await page.locator('.modal input[readonly]').inputValue();
+  await page.getByRole('button', { name: 'Done' }).click();
+  const res = await fetch(`${base}/api/v1/orders?per_page=1`, { headers: { 'X-Api-Token': token } });
+  if (res.status !== 200) throw new Error(`REST API returned ${res.status}`);
+});
+
 if (process.env.ADMIN_EMAIL) {
   await step('support panel: take ticket and log in to the account', async () => {
     const admin = await ctx.newPage();
