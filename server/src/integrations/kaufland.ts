@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import { toSqlDate } from './allegro.js';
 import { joinAddress, request } from './http.js';
-import type { Connector, ConnectorContext, MarketplaceOffer, MarketplaceOrder } from './types.js';
+import type { Connector, ConnectorContext, ListingInput, ListingOptions, MarketplaceOffer, MarketplaceOrder } from './types.js';
 
 export const KAUFLAND_BASE = 'https://sellerapi.kaufland.com/v2';
 
@@ -220,5 +220,50 @@ export class KauflandConnector implements Connector {
         tracking_numbers: [shipment.tracking_number],
       });
     }
+  }
+
+  async listingOptions(): Promise<ListingOptions> {
+    return { requires_ean: true, requires_category: false };
+  }
+
+  async createOffer(input: ListingInput): Promise<MarketplaceOffer> {
+    if (!input.ean) throw new Error('Kaufland requires the product EAN');
+    const r = await this.api<{ data: any }>('POST', `/units?storefront=${this.storefront}`, {
+      ean: input.ean,
+      condition: 'NEW',
+      listing_price: Math.round(input.price * 100),
+      amount: Math.max(0, input.stock),
+      id_offer: input.sku || input.ean,
+      handling_time: input.handling_time ?? 1,
+      note: '',
+    });
+    const u = r.data ?? {};
+    return {
+      external_id: String(u.id_unit ?? `pending-${input.ean}`),
+      title: input.title,
+      sku: input.sku || input.ean,
+      ean: input.ean,
+      price: input.price,
+      currency: STOREFRONT_CURRENCY[this.storefront] ?? 'PLN',
+      stock: input.stock,
+      status: u.status ?? 'available',
+      url: '',
+      image: input.images[0] ?? '',
+    };
+  }
+
+  async setOfferActive(offer: { external_id: string; sku: string; ean: string; price: number; stock: number }, active: boolean) {
+    if (!active) {
+      await this.api('DELETE', `/units/${encodeURIComponent(offer.external_id)}?storefront=${this.storefront}`);
+      return;
+    }
+    await this.api('POST', `/units?storefront=${this.storefront}`, {
+      ean: offer.ean,
+      condition: 'NEW',
+      listing_price: Math.round(offer.price * 100),
+      amount: Math.max(0, offer.stock),
+      id_offer: offer.sku,
+      handling_time: 1,
+    });
   }
 }

@@ -4,16 +4,6 @@
  */
 export const migrations: string[] = [
   `
-  CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'admin',
-    language TEXT NOT NULL DEFAULT 'pl',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -72,12 +62,23 @@ export const migrations: string[] = [
   CREATE TABLE warehouses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE catalogs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+    catalog_id INTEGER REFERENCES catalogs(id) ON DELETE CASCADE,
     sku TEXT NOT NULL DEFAULT '',
     ean TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
@@ -101,6 +102,36 @@ export const migrations: string[] = [
   );
   CREATE INDEX idx_products_sku ON products(sku);
   CREATE INDEX idx_products_ean ON products(ean);
+  CREATE INDEX idx_products_catalog ON products(catalog_id);
+
+  CREATE TABLE product_stock (
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+    stock INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (product_id, warehouse_id)
+  );
+
+  CREATE TABLE warehouse_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL CHECK (type IN ('PZ','PW','WZ','RW','MM')),
+    number TEXT NOT NULL,
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+    target_warehouse_id INTEGER REFERENCES warehouses(id),
+    status TEXT NOT NULL DEFAULT 'draft',
+    contractor TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    confirmed_at TEXT
+  );
+
+  CREATE TABLE warehouse_doc_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES warehouse_docs(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    price REAL NOT NULL DEFAULT 0
+  );
 
   CREATE TABLE stock_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +140,7 @@ export const migrations: string[] = [
     stock_after INTEGER NOT NULL,
     reason TEXT NOT NULL,
     order_id INTEGER,
+    warehouse_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -118,6 +150,7 @@ export const migrations: string[] = [
     source TEXT NOT NULL DEFAULT 'manual',
     integration_id INTEGER REFERENCES integrations(id) ON DELETE SET NULL,
     status_id INTEGER NOT NULL REFERENCES order_statuses(id),
+    warehouse_id INTEGER REFERENCES warehouses(id) ON DELETE SET NULL,
     status_changed_at TEXT NOT NULL DEFAULT (datetime('now')),
     date_add TEXT NOT NULL DEFAULT (datetime('now')),
     user_login TEXT NOT NULL DEFAULT '',
@@ -214,6 +247,7 @@ export const migrations: string[] = [
     product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
     sync_stock INTEGER NOT NULL DEFAULT 1,
     sync_price INTEGER NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT '',
     last_synced_at TEXT,
     raw TEXT NOT NULL DEFAULT '{}',
     UNIQUE (integration_id, external_id)

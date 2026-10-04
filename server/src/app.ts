@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { errorHandler } from './lib/http.js';
+import { adminRouter } from './routes/admin.js';
 import { authRouter, requireAuth, usersRouter } from './routes/auth.js';
+import { billingRouter } from './routes/billing.js';
+import { supportRouter } from './routes/support.js';
+import { catalogsRouter, docsRouter, warehousesRouter } from './routes/warehouses.js';
 import { invoicesRouter, returnsRouter, shipmentsRouter } from './routes/documents.js';
 import { integrationsRouter, offersRouter } from './routes/integrations.js';
 import { dashboardRouter, miscRouter, publicRouter, rulesRouter, settingsRouter } from './routes/misc.js';
@@ -30,6 +34,7 @@ export function createApp() {
   });
   app.use('/api/auth', authRouter);
   app.use('/api/public', publicRouter);
+  app.use('/api/admin', adminRouter);
 
   const api = express.Router();
   api.use(requireAuth);
@@ -37,6 +42,11 @@ export function createApp() {
   api.use('/statuses', statusesRouter);
   api.use('/orders', ordersRouter);
   api.use('/products', productsRouter);
+  api.use('/warehouses', warehousesRouter);
+  api.use('/catalogs', catalogsRouter);
+  api.use('/warehouse-docs', docsRouter);
+  api.use('/support', supportRouter);
+  api.use('/billing', billingRouter);
   api.use('/integrations', integrationsRouter);
   api.use('/offers', offersRouter);
   api.use('/shipments', shipmentsRouter);

@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { config } from '../config.js';
-import { db, getSetting } from '../db/index.js';
+import { currentAccountId, db, getSetting } from '../db/index.js';
 import { notFound } from '../lib/http.js';
 import { addHistory, getOrder, orderTotal } from './orders.js';
 
@@ -38,7 +38,7 @@ export function renderTemplate(text: string, orderId: number): string {
     tracking_number: tracking ?? '',
     products: items,
     company_name: company.name ?? '',
-    order_link: `${config.appUrl}/order/${o.id}/${o.token}`,
+    order_link: `${config.appUrl}/order/${currentAccountId()}/${o.id}/${o.token}`,
   };
   return text.replace(/\[([a-z_]+)\]/g, (m, k) => (k in tags ? tags[k] : m));
 }

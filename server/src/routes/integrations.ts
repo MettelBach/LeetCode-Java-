@@ -16,7 +16,8 @@ import {
   syncOrders,
 } from '../integrations/sync.js';
 import { STATUS_CODES } from '../integrations/types.js';
-import { requireAdmin } from './auth.js';
+import { planById } from '../services/platform.js';
+import { requireAdmin, userName } from './auth.js';
 
 export const integrationsRouter = Router();
 
@@ -79,10 +80,16 @@ const settingsSchema = z
     auto_link: z.boolean(),
     auto_accept: z.boolean(),
     sync_cancel: z.boolean(),
+    warehouse_id: z.number().int().nullable(),
+    stock_warehouse_ids: z.array(z.number().int()),
+    catalog_id: z.number().int().nullable(),
   })
   .partial();
 
 integrationsRouter.post('/', requireAdmin, (req, res) => {
+  const plan = planById(req.account!.plan);
+  const count = (db.prepare('SELECT COUNT(*) c FROM integrations').get() as { c: number }).c;
+  if (count >= plan.integrations) throw new HttpError(402, `Your plan allows ${plan.integrations} integration(s). Upgrade the plan to add more.`);
   const b = z
     .object({
       type: z.enum(['allegro', 'empik', 'kaufland']),
@@ -328,6 +335,119 @@ offersRouter.post('/:id/update', async (req, res) => {
     id,
   );
   res.json({ ok: true });
+});
+
+/* -------------------------------- offer manager -------------------------------- */
+
+offersRouter.get('/listing-options/:integrationId', async (req, res) => {
+  const integration = loadIntegration(idParam(req, 'integrationId'));
+  try {
+    res.json(await connectorFor(integration).listingOptions());
+  } catch (e: any) {
+    throw new HttpError(502, e.message);
+  }
+});
+
+/** Lists inventory products on a marketplace account ("Wystaw oferty"). */
+offersRouter.post('/list', async (req, res) => {
+  const b = z
+    .object({
+      integration_id: z.number().int(),
+      product_ids: z.array(z.number().int()).min(1).max(500),
+      price_markup: z.number().min(-90).max(500).optional(),
+      shipping_rates_id: z.string().max(100).optional(),
+      category_id: z.string().max(50).optional(),
+      handling_time: z.number().int().min(0).max(60).optional(),
+      title_template: z.string().max(200).optional(),
+    })
+    .parse(req.body);
+  const integration = loadIntegration(b.integration_id);
+  if (!integration.enabled) throw new HttpError(400, 'Integration is disabled');
+  const connector = connectorFor(integration);
+  const results: { product_id: number; ok: boolean; offer_id?: string; error?: string }[] = [];
+  for (const pid of b.product_ids) {
+    const p = db.prepare('SELECT * FROM products WHERE id = ?').get(pid) as any;
+    if (!p) {
+      results.push({ product_id: pid, ok: false, error: 'Product not found' });
+      continue;
+    }
+    if (db.prepare('SELECT 1 FROM products WHERE parent_id = ?').get(pid)) {
+      results.push({ product_id: pid, ok: false, error: 'Product has variants — list the variants' });
+      continue;
+    }
+    const existing = db.prepare(`SELECT external_id FROM offers WHERE integration_id = ? AND product_id = ? AND status != 'ended'`).get(b.integration_id, pid) as any;
+    if (existing) {
+      results.push({ product_id: pid, ok: false, error: `Already listed (${existing.external_id})` });
+      continue;
+    }
+    const price = Math.round(p.price * (1 + (b.price_markup ?? 0) / 100) * 100) / 100;
+    const title = (b.title_template || '{name}').replace('{name}', p.name).replace('{sku}', p.sku).slice(0, 200);
+    try {
+      const o = await connector.createOffer({
+        sku: p.sku,
+        ean: p.ean,
+        title,
+        description: p.description,
+        price,
+        currency: 'PLN',
+        stock: Math.max(0, p.stock),
+        images: parseJson<string[]>(p.images, []),
+        category_id: b.category_id,
+        shipping_rates_id: b.shipping_rates_id,
+        handling_time: b.handling_time,
+      });
+      db.prepare(
+        `INSERT INTO offers (integration_id, external_id, title, sku, ean, price, currency, stock, status, url, image, product_id, raw, last_synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(integration_id, external_id) DO UPDATE SET product_id = excluded.product_id, status = excluded.status`,
+      ).run(b.integration_id, o.external_id, o.title, o.sku, o.ean, o.price, o.currency, o.stock, o.status, o.url, o.image, pid, JSON.stringify(o.raw ?? {}));
+      results.push({ product_id: pid, ok: true, offer_id: o.external_id });
+    } catch (e: any) {
+      results.push({ product_id: pid, ok: false, error: e.message });
+    }
+  }
+  syncLog(b.integration_id, `Listing by ${userName(req)}: ${results.filter((r) => r.ok).length} created, ${results.filter((r) => !r.ok).length} failed`);
+  res.json({ results });
+});
+
+async function setActive(id: number, active: boolean) {
+  const off = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as any;
+  if (!off) throw new HttpError(404, 'Offer not found');
+  const integration = loadIntegration(off.integration_id);
+  await connectorFor(integration).setOfferActive({ ...off, raw: parseJson(off.raw, {}) }, active);
+  db.prepare(`UPDATE offers SET status = ?, last_synced_at = datetime('now') WHERE id = ?`).run(active ? 'active' : 'ended', id);
+}
+
+offersRouter.post('/bulk-status', async (req, res) => {
+  const b = z.object({ ids: z.array(z.number().int()).min(1).max(1000), active: z.boolean() }).parse(req.body);
+  const errors: { id: number; error: string }[] = [];
+  for (const id of b.ids) {
+    try {
+      await setActive(id, b.active);
+    } catch (e: any) {
+      errors.push({ id, error: e.message });
+    }
+  }
+  res.json({ ok: b.ids.length - errors.length, errors });
+});
+
+offersRouter.post('/bulk-price', async (req, res) => {
+  // Changes prices of offers by a percentage directly on the marketplace.
+  const b = z.object({ ids: z.array(z.number().int()).min(1).max(1000), percent: z.number().min(-90).max(500) }).parse(req.body);
+  const errors: { id: number; error: string }[] = [];
+  for (const id of b.ids) {
+    const off = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as any;
+    if (!off) continue;
+    const price = Math.round(off.price * (1 + b.percent / 100) * 100) / 100;
+    try {
+      const integration = loadIntegration(off.integration_id);
+      await connectorFor(integration).updateOffer({ ...off, raw: parseJson(off.raw, {}) }, integration.type === 'empik' ? { price, stock: off.stock } : { price });
+      db.prepare(`UPDATE offers SET price = ?, last_synced_at = datetime('now') WHERE id = ?`).run(price, id);
+    } catch (e: any) {
+      errors.push({ id, error: e.message });
+    }
+  }
+  res.json({ ok: b.ids.length - errors.length, errors });
 });
 
 export { sendTrackingToSource };

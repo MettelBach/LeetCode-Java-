@@ -5,7 +5,7 @@
  */
 import { toSqlDate } from './allegro.js';
 import { joinAddress, request } from './http.js';
-import type { Connector, ConnectorContext, MarketplaceOffer, MarketplaceOrder } from './types.js';
+import type { Connector, ConnectorContext, ListingInput, ListingOptions, MarketplaceOffer, MarketplaceOrder } from './types.js';
 
 export const EMPIK_DEFAULT_URL = 'https://marketplace.empik.com';
 
@@ -210,5 +210,58 @@ export class EmpikConnector implements Connector {
     });
     // Mirakl requires an explicit "ship" confirmation after setting tracking.
     await this.api('PUT', `/api/orders/${id}/ship`);
+  }
+
+  async listingOptions(): Promise<ListingOptions> {
+    return { requires_ean: true, requires_category: false };
+  }
+
+  /** Mirakl offers are attached to existing catalogue products identified by EAN (OF24). */
+  async createOffer(input: ListingInput): Promise<MarketplaceOffer> {
+    if (!input.ean) throw new Error('Empik requires the product EAN');
+    const r = await this.api<{ import_id: number }>('POST', '/api/offers', {
+      offers: [
+        {
+          shop_sku: input.sku || input.ean,
+          product_id: input.ean,
+          product_id_type: 'EAN',
+          price: input.price.toFixed(2),
+          quantity: Math.max(0, input.stock),
+          state_code: '11',
+          update_delete: 'update',
+          description: input.description.slice(0, 2000),
+          leadtime_to_ship: input.handling_time ?? 2,
+        },
+      ],
+    });
+    return {
+      external_id: `pending-${r.import_id ?? Date.now()}-${input.sku || input.ean}`,
+      title: input.title,
+      sku: input.sku || input.ean,
+      ean: input.ean,
+      price: input.price,
+      currency: 'PLN',
+      stock: input.stock,
+      status: 'pending',
+      url: '',
+      image: input.images[0] ?? '',
+      raw: { import_id: r.import_id, state_code: '11' },
+    };
+  }
+
+  async setOfferActive(offer: { sku: string; ean: string; price: number; stock: number; raw: any }, active: boolean) {
+    await this.api('POST', '/api/offers', {
+      offers: [
+        {
+          shop_sku: offer.sku,
+          product_id: offer.ean || offer.raw?.product_sku || offer.sku,
+          product_id_type: offer.ean ? 'EAN' : 'SHOP_SKU',
+          price: offer.price.toFixed(2),
+          quantity: active ? Math.max(0, offer.stock) : 0,
+          state_code: offer.raw?.state_code ?? '11',
+          update_delete: active ? 'update' : 'delete',
+        },
+      ],
+    });
   }
 }

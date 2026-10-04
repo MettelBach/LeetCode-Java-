@@ -3,7 +3,8 @@
  * Docs: https://developer.allegro.pl/documentation
  */
 import { ApiError, joinAddress, request } from './http.js';
-import type { Connector, ConnectorContext, MarketplaceOffer, MarketplaceOrder } from './types.js';
+import crypto from 'node:crypto';
+import type { Connector, ConnectorContext, ListingInput, ListingOptions, MarketplaceOffer, MarketplaceOrder } from './types.js';
 
 const MEDIA = 'application/vnd.allegro.public.v1+json';
 
@@ -232,6 +233,58 @@ export class AllegroConnector implements Connector {
       ...(carrierId === 'OTHER' ? { carrierName: shipment.courier } : {}),
       waybill: shipment.tracking_number,
       lineItems: order.items.filter((i) => i.external_line_id).map((i) => ({ id: i.external_line_id })),
+    });
+  }
+
+  async listingOptions(): Promise<ListingOptions> {
+    const r = await this.api<{ shippingRates: { id: string; name: string }[] }>('GET', '/sale/shipping-rates');
+    return { shipping_rates: (r.shippingRates ?? []).map((x) => ({ id: x.id, name: x.name })), requires_ean: false, requires_category: false };
+  }
+
+  async createOffer(input: ListingInput): Promise<MarketplaceOffer> {
+    const html = input.description
+      ? input.description
+          .split(/\n{2,}/)
+          .map((p) => `<p>${p.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`)
+          .join('')
+      : `<p>${input.title}</p>`;
+    const body: any = {
+      name: input.title.slice(0, 75),
+      productSet: [
+        {
+          product: input.ean
+            ? { id: input.ean, idType: 'GTIN' }
+            : { name: input.title.slice(0, 75), category: input.category_id ? { id: input.category_id } : undefined, images: input.images },
+        },
+      ],
+      sellingMode: { format: 'BUY_NOW', price: { amount: input.price.toFixed(2), currency: input.currency || 'PLN' } },
+      stock: { available: Math.max(0, input.stock), unit: 'UNIT' },
+      external: input.sku ? { id: input.sku } : undefined,
+      images: input.images,
+      description: { sections: [{ items: [{ type: 'TEXT', content: html }] }] },
+      publication: { status: 'ACTIVE' },
+    };
+    if (input.category_id) body.category = { id: input.category_id };
+    if (input.shipping_rates_id) body.delivery = { shippingRates: { id: input.shipping_rates_id } };
+    const o = await this.api<any>('POST', '/sale/product-offers', body);
+    return {
+      external_id: String(o.id),
+      title: o.name ?? input.title,
+      sku: input.sku,
+      ean: input.ean,
+      price: input.price,
+      currency: input.currency || 'PLN',
+      stock: input.stock,
+      status: String(o.publication?.status ?? 'activating').toLowerCase(),
+      url: `${this.hosts.web}/oferta/${o.id}`,
+      image: input.images[0] ?? '',
+    };
+  }
+
+  async setOfferActive(offer: { external_id: string }, active: boolean) {
+    await this.api('PUT', `/sale/offer-publication-commands/${crypto.randomUUID()}`, {
+      publication: { action: active ? 'ACTIVATE' : 'END' },
+      offerCriteria: [{ offers: [{ id: offer.external_id }], type: 'CONTAINS_OFFERS' }],
     });
   }
 }

@@ -31,6 +31,7 @@ const T: Record<Lang, Record<string, string>> = {
     t_sent_body:
       'Dzień dobry [buyer_name],\n\nTwoje zamówienie nr [order_id] zostało wysłane.\nNumer przesyłki: [tracking_number]\n\nPozdrawiamy,\n[company_name]',
     wh: 'Magazyn główny',
+    cat: 'Katalog główny',
     inv: 'Faktury',
     pro: 'Proformy',
     rec: 'Paragony',
@@ -64,6 +65,7 @@ const T: Record<Lang, Record<string, string>> = {
     t_sent_body:
       'Hello [buyer_name],\n\nyour order no. [order_id] has been shipped.\nTracking number: [tracking_number]\n\nBest regards,\n[company_name]',
     wh: 'Main warehouse',
+    cat: 'Main catalog',
     inv: 'Invoices',
     pro: 'Pro forma',
     rec: 'Receipts',
@@ -97,6 +99,7 @@ const T: Record<Lang, Record<string, string>> = {
     t_sent_body:
       'Здравствуйте, [buyer_name]!\n\nВаш заказ № [order_id] отправлен.\nНомер отправления: [tracking_number]\n\nС уважением,\n[company_name]',
     wh: 'Основной склад',
+    cat: 'Основной каталог',
     inv: 'Счета-фактуры',
     pro: 'Проформы',
     rec: 'Чеки',
@@ -105,10 +108,10 @@ const T: Record<Lang, Record<string, string>> = {
 };
 
 /** Inserts the default configuration on an empty database. Idempotent. */
-export function seedDefaults(db: DB) {
+export function seedDefaults(db: DB, langParam = 'pl') {
   const has = db.prepare('SELECT COUNT(*) c FROM order_statuses').get() as { c: number };
   if (has.c > 0) return;
-  const lang = (['pl', 'en', 'ru'].includes(process.env.DEFAULT_LANG ?? '') ? process.env.DEFAULT_LANG : 'pl') as Lang;
+  const lang = (['pl', 'en', 'ru'].includes(langParam) ? langParam : 'pl') as Lang;
   const t = T[lang];
 
   db.transaction(() => {
@@ -132,7 +135,8 @@ export function seedDefaults(db: DB) {
     r.run(t.r_refunded, '#219653', 4, 'refunded');
     r.run(t.r_rejected, '#d9363e', 5, 'rejected');
 
-    db.prepare('INSERT INTO warehouses (name, is_default) VALUES (?, 1)').run(t.wh);
+    db.prepare(`INSERT INTO warehouses (name, code, is_default) VALUES (?, 'MAG1', 1)`).run(t.wh);
+    db.prepare('INSERT INTO catalogs (name, is_default) VALUES (?, 1)').run(t.cat);
 
     const ser = db.prepare('INSERT INTO invoice_series (name, type, format, reset_period, is_default) VALUES (?, ?, ?, ?, 1)');
     ser.run(t.inv, 'invoice', 'FV %N/%M/%Y', 'month');

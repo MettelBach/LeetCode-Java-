@@ -1,7 +1,7 @@
 import { db, getSetting, parseJson, tx } from '../db/index.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
-import { adjustStock, deductOrderStock, findProduct, restoreOrderStock } from './stock.js';
+import { adjustOrderItemStock, deductOrderStock, findProduct, restoreOrderStock } from './stock.js';
 
 export const ORDER_FIELDS = [
   'external_id',
@@ -45,11 +45,12 @@ export const ORDER_FIELDS = [
   'flag',
   'external_status',
   'external_data',
+  'warehouse_id',
 ] as const;
 
 /** Fields a user may edit on an existing order. */
 export const EDITABLE_FIELDS = ORDER_FIELDS.filter(
-  (f) => !['external_id', 'source', 'integration_id', 'external_data', 'external_status', 'paid_amount', 'payment_date'].includes(f),
+  (f) => !['external_id', 'source', 'integration_id', 'external_data', 'external_status', 'paid_amount', 'payment_date', 'warehouse_id'].includes(f),
 );
 
 export interface ItemInput {
@@ -253,7 +254,7 @@ export function addItem(orderId: number, it: ItemInput, user = 'System') {
   const settings = getSetting('orders', { default_tax_rate: 23 } as any);
   const res = tx(() => {
     const r = insertItem(orderId, it, settings.default_tax_rate ?? 23);
-    if (o.stock_deducted && r.productId) adjustStock(r.productId, -it.quantity, 'order', orderId);
+    if (o.stock_deducted && r.productId) adjustOrderItemStock(orderId, r.productId, -it.quantity, 'order');
     addHistory(orderId, `Product added: ${it.quantity}x ${it.name}`, 'items', user);
     return r.id;
   });
@@ -271,10 +272,10 @@ export function updateItem(orderId: number, itemId: number, patch: Partial<ItemI
   tx(() => {
     if (o.stock_deducted) {
       // Give back the old quantity and take the new one.
-      if (it.product_id) adjustStock(it.product_id, it.quantity, 'order_edit', orderId);
+      if (it.product_id) adjustOrderItemStock(orderId, it.product_id, it.quantity, 'order_edit');
       const newPid = data.product_id !== undefined ? data.product_id : it.product_id;
       const newQty = data.quantity ?? it.quantity;
-      if (newPid) adjustStock(newPid, -newQty, 'order_edit', orderId);
+      if (newPid) adjustOrderItemStock(orderId, newPid, -newQty, 'order_edit');
     }
     db.prepare(`UPDATE order_items SET ${Object.keys(data).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(
       ...Object.values(data),
@@ -289,7 +290,7 @@ export function deleteItem(orderId: number, itemId: number, user = 'System') {
   const it = db.prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ?').get(itemId, orderId) as any;
   if (!it) throw notFound('Item not found');
   tx(() => {
-    if (o.stock_deducted && it.product_id) adjustStock(it.product_id, it.quantity, 'order_edit', orderId);
+    if (o.stock_deducted && it.product_id) adjustOrderItemStock(orderId, it.product_id, it.quantity, 'order_edit');
     db.prepare('DELETE FROM order_items WHERE id = ?').run(itemId);
     addHistory(orderId, `Product removed: ${it.quantity}x ${it.name}`, 'items', user);
   });

@@ -32,6 +32,12 @@ export interface IntegrationSettings {
   auto_accept?: boolean;
   /** Mark local order as canceled when canceled on the marketplace. */
   sync_cancel?: boolean;
+  /** Warehouse from which orders of this account are fulfilled (stock deduction). */
+  warehouse_id?: number | null;
+  /** Warehouses whose stock is sent to offers (empty = all). */
+  stock_warehouse_ids?: number[];
+  /** Catalog used for automatic linking and listing. */
+  catalog_id?: number | null;
   [k: string]: unknown;
 }
 
@@ -62,6 +68,26 @@ export interface ShipmentInfo {
   tracking_number: string;
 }
 
+export interface ListingInput {
+  sku: string;
+  ean: string;
+  title: string;
+  description: string;
+  price: number;
+  currency: string;
+  stock: number;
+  images: string[];
+  category_id?: string;
+  shipping_rates_id?: string;
+  handling_time?: number;
+}
+
+export interface ListingOptions {
+  shipping_rates?: { id: string; name: string }[];
+  requires_ean: boolean;
+  requires_category: boolean;
+}
+
 export interface ConnectorContext {
   integration: IntegrationRow;
   saveState(patch: Record<string, unknown>): void;
@@ -76,6 +102,12 @@ export interface Connector {
   /** Performs a marketplace action/status change for an order (codes per marketplace, see STATUS_CODES). */
   setOrderStatus(order: { external_id: string; external_data: any; items: { external_line_id: string }[] }, code: string): Promise<void>;
   sendTracking(order: { external_id: string; external_data: any; items: { external_line_id: string }[] }, shipment: ShipmentInfo): Promise<void>;
+  /** Options needed by the listing form (e.g. Allegro shipping rates). */
+  listingOptions(): Promise<ListingOptions>;
+  /** Creates a new offer on the marketplace from an inventory product. */
+  createOffer(input: ListingInput): Promise<MarketplaceOffer>;
+  /** Ends (active=false) or re-activates an offer. */
+  setOfferActive(offer: { external_id: string; sku: string; ean: string; price: number; stock: number; raw: any }, active: boolean): Promise<void>;
 }
 
 /** Marketplace status codes available for the local → marketplace status mapping. */

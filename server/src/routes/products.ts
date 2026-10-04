@@ -2,13 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db, parseJson, tx } from '../db/index.js';
 import { HttpError, idParam, q, round2 } from '../lib/http.js';
-import { adjustStock, setStock } from '../services/stock.js';
+import { adjustStock, defaultCatalogId, setStock } from '../services/stock.js';
 import { userName } from './auth.js';
 
 export const productsRouter = Router();
 
 const productSchema = z.object({
   parent_id: z.number().int().nullable().optional(),
+  catalog_id: z.number().int().optional(),
   sku: z.string().max(100).optional(),
   ean: z.string().max(50).optional(),
   name: z.string().min(1).max(500),
@@ -27,9 +28,12 @@ const productSchema = z.object({
   images: z.array(z.string().url().max(2000)).max(30).optional(),
   attributes: z.record(z.string(), z.string()).optional(),
   variant_name: z.string().max(200).optional(),
+  /** Stock per warehouse: { "<warehouse id>": quantity }. */
+  stocks: z.record(z.string(), z.number().int().min(-1e6).max(1e7)).optional(),
+  warehouse_id: z.number().int().optional(),
 });
 
-const FIELDS = ['parent_id', 'sku', 'ean', 'name', 'description', 'price', 'purchase_price', 'tax_rate', 'weight', 'width', 'height', 'length', 'location', 'category_id', 'manufacturer_id', 'images', 'attributes', 'variant_name'] as const;
+const FIELDS = ['parent_id', 'catalog_id', 'sku', 'ean', 'name', 'description', 'price', 'purchase_price', 'tax_rate', 'weight', 'width', 'height', 'length', 'location', 'category_id', 'manufacturer_id', 'images', 'attributes', 'variant_name'] as const;
 
 function serialize(b: Partial<z.infer<typeof productSchema>>) {
   const data: Record<string, unknown> = {};
@@ -40,9 +44,10 @@ function serialize(b: Partial<z.infer<typeof productSchema>>) {
   return data;
 }
 
-function checkSkuUnique(sku: string | undefined, exceptId?: number) {
+function checkSkuUnique(sku: string | undefined, exceptId?: number, catalogId?: number) {
   if (!sku) return;
-  const dup = db.prepare('SELECT id FROM products WHERE sku = ? AND id != ?').get(sku, exceptId ?? 0) as any;
+  const cat = catalogId ?? (exceptId ? (db.prepare('SELECT catalog_id FROM products WHERE id = ?').get(exceptId) as any)?.catalog_id : defaultCatalogId());
+  const dup = db.prepare('SELECT id FROM products WHERE sku = ? AND id != ? AND catalog_id IS ?').get(sku, exceptId ?? 0, cat ?? null) as any;
   if (dup) throw new HttpError(409, `SKU "${sku}" is already used by product ${dup.id}`);
 }
 
@@ -50,6 +55,8 @@ productsRouter.get('/', (req, res) => {
   const search = q.str(req.query.search);
   const category = q.int(req.query.category_id);
   const manufacturer = q.int(req.query.manufacturer_id);
+  const catalog = q.int(req.query.catalog_id);
+  const warehouse = q.int(req.query.warehouse_id);
   const stock = q.str(req.query.stock);
   const page = Math.max(1, q.int(req.query.page) ?? 1);
   const perPage = Math.min(500, Math.max(1, q.int(req.query.per_page) ?? 50));
@@ -64,6 +71,10 @@ productsRouter.get('/', (req, res) => {
       OR EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id AND (v.sku LIKE ? OR v.ean LIKE ? OR v.name LIKE ?)))`);
     p.push(like, like, like, search, like, like, like);
   }
+  if (catalog) {
+    w.push('p.catalog_id = ?');
+    p.push(catalog);
+  }
   if (category) {
     w.push('p.category_id = ?');
     p.push(category);
@@ -72,7 +83,11 @@ productsRouter.get('/', (req, res) => {
     w.push('p.manufacturer_id = ?');
     p.push(manufacturer);
   }
-  const stockExpr = `(CASE WHEN EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id) THEN (SELECT SUM(stock) FROM products v WHERE v.parent_id = p.id) ELSE p.stock END)`;
+  const own = warehouse ? `COALESCE((SELECT stock FROM product_stock s WHERE s.product_id = p.id AND s.warehouse_id = ${Number(warehouse)}), 0)` : 'p.stock';
+  const varSum = warehouse
+    ? `(SELECT COALESCE(SUM(s.stock),0) FROM product_stock s JOIN products v ON v.id = s.product_id WHERE v.parent_id = p.id AND s.warehouse_id = ${Number(warehouse)})`
+    : '(SELECT SUM(stock) FROM products v WHERE v.parent_id = p.id)';
+  const stockExpr = `(CASE WHEN EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id) THEN ${varSum} ELSE ${own} END)`;
   if (stock === 'in') w.push(`${stockExpr} > 0`);
   if (stock === 'out') w.push(`${stockExpr} <= 0`);
   if (stock === 'low') w.push(`${stockExpr} > 0 AND ${stockExpr} <= 5`);
@@ -100,20 +115,22 @@ productsRouter.get('/search', (req, res) => {
   // Lightweight lookup for "add product to order".
   const s = q.str(req.query.q) ?? '';
   const like = `%${s}%`;
+  const cat = q.int(req.query.catalog_id);
   const rows = db
     .prepare(
       `SELECT p.id, p.sku, p.ean, p.name, p.variant_name, p.price, p.tax_rate, p.weight, p.stock, p.location, p.images, p.parent_id,
          (SELECT name FROM products x WHERE x.id = p.parent_id) parent_name
        FROM products p WHERE (p.name LIKE ? OR p.sku LIKE ? OR p.ean LIKE ? OR CAST(p.id AS TEXT) = ?)
-       AND NOT EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id)
+       AND NOT EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id) ${cat ? 'AND p.catalog_id = ?' : ''}
        ORDER BY p.name LIMIT 20`,
     )
-    .all(like, like, like, s) as any[];
+    .all(like, like, like, s, ...(cat ? [cat] : [])) as any[];
   res.json(rows.map((r) => ({ ...r, images: parseJson(r.images, []) })));
 });
 
-productsRouter.get('/export.csv', (_req, res) => {
-  const rows = db.prepare('SELECT * FROM products ORDER BY id').all() as any[];
+productsRouter.get('/export.csv', (req, res) => {
+  const cat = q.int(req.query.catalog_id);
+  const rows = (cat ? db.prepare('SELECT * FROM products WHERE catalog_id = ? ORDER BY id').all(cat) : db.prepare('SELECT * FROM products ORDER BY id').all()) as any[];
   const cols = ['id', 'parent_id', 'sku', 'ean', 'name', 'price', 'purchase_price', 'tax_rate', 'stock', 'weight', 'location'];
   const esc = (v: unknown) => {
     let s = String(v ?? '');
@@ -127,7 +144,8 @@ productsRouter.get('/export.csv', (_req, res) => {
 
 productsRouter.post('/import', (req, res) => {
   // CSV with header: sku;ean;name;price;stock;... (semicolon or comma separated). Upserts by SKU.
-  const b = z.object({ csv: z.string().max(10_000_000) }).parse(req.body);
+  const b = z.object({ csv: z.string().max(10_000_000), catalog_id: z.number().int().optional() }).parse(req.body);
+  const catalogId = b.catalog_id ?? defaultCatalogId();
   const lines = b.csv.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) throw new HttpError(400, 'CSV must have a header and at least one row');
   const sep = lines[0].includes(';') ? ';' : ',';
@@ -170,7 +188,7 @@ productsRouter.post('/import', (req, res) => {
         if (v !== undefined && Number.isFinite(v)) data[f] = v;
       }
       if (!data.name) continue;
-      const existing = sku ? (db.prepare('SELECT id FROM products WHERE sku = ?').get(sku) as any) : undefined;
+      const existing = sku ? (db.prepare('SELECT id FROM products WHERE sku = ? AND catalog_id = ?').get(sku, catalogId) as any) : undefined;
       const stock = num(get('stock'));
       if (existing) {
         db.prepare(`UPDATE products SET ${Object.keys(data).map((k) => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(
@@ -180,8 +198,8 @@ productsRouter.post('/import', (req, res) => {
         if (stock !== undefined && Number.isFinite(stock)) setStock(existing.id, Math.trunc(stock), 'import');
         updated++;
       } else {
-        const cols = ['sku', ...Object.keys(data)];
-        const r = db.prepare(`INSERT INTO products (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(sku, ...Object.values(data));
+        const cols = ['sku', 'catalog_id', ...Object.keys(data)];
+        const r = db.prepare(`INSERT INTO products (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(sku, catalogId, ...Object.values(data));
         if (stock !== undefined && Number.isFinite(stock)) adjustStock(Number(r.lastInsertRowid), Math.trunc(stock), 'import');
         created++;
       }
@@ -194,13 +212,15 @@ productsRouter.get('/:id', (req, res) => {
   const id = idParam(req);
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
   if (!p) throw new HttpError(404, 'Product not found');
-  const variants = (db.prepare('SELECT * FROM products WHERE parent_id = ? ORDER BY id').all(id) as any[]).map((v) => ({
+  const variants: any[] = (db.prepare('SELECT * FROM products WHERE parent_id = ? ORDER BY id').all(id) as any[]).map((v) => ({
     ...v,
     images: parseJson(v.images, []),
     attributes: parseJson(v.attributes, {}),
   }));
   const history = db
-    .prepare('SELECT * FROM stock_history WHERE product_id IN (SELECT id FROM products WHERE id = ? OR parent_id = ?) ORDER BY id DESC LIMIT 200')
+    .prepare(
+      'SELECT h.*, w.name warehouse_name FROM stock_history h LEFT JOIN warehouses w ON w.id = h.warehouse_id WHERE h.product_id IN (SELECT id FROM products WHERE id = ? OR parent_id = ?) ORDER BY h.id DESC LIMIT 200',
+    )
     .all(id, id);
   const offers = db
     .prepare(
@@ -215,21 +235,35 @@ productsRouter.get('/:id', (req, res) => {
        GROUP BY d ORDER BY d`,
     )
     .all(id, id);
-  res.json({ ...p, images: parseJson(p.images, []), attributes: parseJson(p.attributes, {}), variants, history, offers, sales });
+  const stocks = db
+    .prepare('SELECT w.id warehouse_id, w.name, w.code, COALESCE(s.stock, 0) stock FROM warehouses w LEFT JOIN product_stock s ON s.warehouse_id = w.id AND s.product_id = ? ORDER BY w.is_default DESC, w.id')
+    .all(id);
+  for (const v of variants) {
+    v.stocks = db
+      .prepare('SELECT w.id warehouse_id, COALESCE(s.stock, 0) stock FROM warehouses w LEFT JOIN product_stock s ON s.warehouse_id = w.id AND s.product_id = ? ORDER BY w.is_default DESC, w.id')
+      .all(v.id);
+  }
+  res.json({ ...p, images: parseJson(p.images, []), attributes: parseJson(p.attributes, {}), variants, history, offers, sales, stocks });
 });
 
 productsRouter.post('/', (req, res) => {
   const b = productSchema.parse(req.body);
-  checkSkuUnique(b.sku);
+  checkSkuUnique(b.sku, undefined, b.catalog_id);
   if (b.parent_id && !db.prepare('SELECT 1 FROM products WHERE id = ? AND parent_id IS NULL').get(b.parent_id)) {
     throw new HttpError(400, 'Parent product not found');
   }
   const data = serialize(b);
+  if (!data.catalog_id) {
+    const parent = b.parent_id ? (db.prepare('SELECT catalog_id FROM products WHERE id = ?').get(b.parent_id) as any) : null;
+    data.catalog_id = parent?.catalog_id ?? defaultCatalogId();
+  }
   const cols = Object.keys(data);
   const id = tx(() => {
     const r = db.prepare(`INSERT INTO products (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(data));
     const newId = Number(r.lastInsertRowid);
-    if (b.stock) adjustStock(newId, b.stock, `manual (${userName(req)})`);
+    if (b.stocks) {
+      for (const [wh, v] of Object.entries(b.stocks)) if (v) adjustStock(newId, v, `manual (${userName(req)})`, null, Number(wh));
+    } else if (b.stock) adjustStock(newId, b.stock, `manual (${userName(req)})`, null, b.warehouse_id);
     return newId;
   });
   res.json({ id });
@@ -248,7 +282,9 @@ productsRouter.put('/:id', (req, res) => {
         id,
       );
     }
-    if (b.stock !== undefined) setStock(id, b.stock, `manual (${userName(req)})`);
+    if (b.stocks) {
+      for (const [wh, v] of Object.entries(b.stocks)) setStock(id, v, `manual (${userName(req)})`, Number(wh));
+    } else if (b.stock !== undefined) setStock(id, b.stock, `manual (${userName(req)})`, b.warehouse_id);
   });
   res.json({ ok: true });
 });
@@ -262,13 +298,13 @@ productsRouter.delete('/:id', (req, res) => {
 productsRouter.post('/:id/stock', (req, res) => {
   const id = idParam(req);
   const b = z
-    .object({ change: z.number().int().optional(), value: z.number().int().optional(), reason: z.string().max(200).optional() })
+    .object({ change: z.number().int().optional(), value: z.number().int().optional(), reason: z.string().max(200).optional(), warehouse_id: z.number().int().optional() })
     .refine((v) => v.change !== undefined || v.value !== undefined, 'change or value required')
     .parse(req.body);
   if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(id)) throw new HttpError(404, 'Product not found');
   const reason = b.reason || `manual (${userName(req)})`;
-  if (b.value !== undefined) setStock(id, b.value, reason);
-  else adjustStock(id, b.change!, reason);
+  if (b.value !== undefined) setStock(id, b.value, reason, b.warehouse_id);
+  else adjustStock(id, b.change!, reason, null, b.warehouse_id);
   res.json(db.prepare('SELECT stock FROM products WHERE id = ?').get(id));
 });
 
@@ -276,8 +312,9 @@ productsRouter.post('/bulk', (req, res) => {
   const b = z
     .object({
       ids: z.array(z.number().int()).min(1).max(10000),
-      action: z.enum(['delete', 'set_category', 'set_manufacturer', 'price_percent', 'set_stock', 'set_tax']),
+      action: z.enum(['delete', 'set_category', 'set_manufacturer', 'price_percent', 'set_stock', 'set_tax', 'set_catalog']),
       value: z.any().optional(),
+      warehouse_id: z.number().int().optional(),
     })
     .parse(req.body);
   tx(() => {
@@ -300,7 +337,11 @@ productsRouter.post('/bulk', (req, res) => {
           break;
         }
         case 'set_stock':
-          setStock(id, Math.trunc(Number(b.value) || 0), `bulk (${userName(req)})`);
+          setStock(id, Math.trunc(Number(b.value) || 0), `bulk (${userName(req)})`, b.warehouse_id);
+          break;
+        case 'set_catalog':
+          if (!db.prepare('SELECT 1 FROM catalogs WHERE id = ?').get(Number(b.value))) throw new HttpError(400, 'Unknown catalog');
+          db.prepare('UPDATE products SET catalog_id = ? WHERE id = ? OR parent_id = ?').run(Number(b.value), id, id);
           break;
         case 'set_tax':
           db.prepare('UPDATE products SET tax_rate = ? WHERE id = ?').run(Number(b.value) || 0, id);

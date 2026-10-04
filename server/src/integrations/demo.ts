@@ -5,7 +5,7 @@
  */
 import { toSqlDate } from './allegro.js';
 import { DEMO_CITIES, DEMO_DELIVERY, DEMO_FIRST, DEMO_LAST, DEMO_PRODUCTS, rnd, rndInt } from './demo-data.js';
-import type { Connector, ConnectorContext, IntegrationType, MarketplaceOffer, MarketplaceOrder } from './types.js';
+import type { Connector, ConnectorContext, IntegrationType, ListingInput, ListingOptions, MarketplaceOffer, MarketplaceOrder } from './types.js';
 
 const URLS: Record<IntegrationType, (id: string) => string> = {
   allegro: (id) => `https://allegro.pl/oferta/${id}`,
@@ -162,5 +162,41 @@ export class DemoConnector implements Connector {
 
   async sendTracking(order: { external_id: string }, shipment: { courier: string; tracking_number: string }) {
     this.ctx.log(`[demo] Order ${order.external_id}: tracking ${shipment.tracking_number} (${shipment.courier}) sent to ${this.type}`);
+  }
+
+  async listingOptions(): Promise<ListingOptions> {
+    return {
+      shipping_rates: this.type === 'allegro' ? [{ id: 'demo-std', name: 'Standard (demo)' }, { id: 'demo-free', name: 'Darmowa dostawa (demo)' }] : undefined,
+      requires_ean: this.type !== 'allegro',
+      requires_category: false,
+    };
+  }
+
+  async createOffer(input: ListingInput): Promise<MarketplaceOffer> {
+    if (this.type !== 'allegro' && !input.ean) throw new Error(`${this.type} requires the product EAN`);
+    const offers = this.offers();
+    const id = this.type === 'allegro' ? String(14000000000 + rndInt(1, 999999999)) : this.type === 'kaufland' ? String(rndInt(400000000, 499999999)) : `P${rndInt(2000, 9999)}`;
+    const o: MarketplaceOffer = {
+      external_id: id,
+      title: input.title,
+      sku: input.sku,
+      ean: input.ean,
+      price: input.price,
+      currency: 'PLN',
+      stock: input.stock,
+      status: 'active',
+      url: URLS[this.type](id),
+      image: input.images[0] ?? '',
+    };
+    offers.push(o);
+    this.ctx.saveState({ demo_offers: offers });
+    return o;
+  }
+
+  async setOfferActive(offer: { external_id: string }, active: boolean) {
+    const offers = this.offers();
+    const o = offers.find((x) => x.external_id === offer.external_id);
+    if (o) o.status = active ? 'active' : 'ended';
+    this.ctx.saveState({ demo_offers: offers });
   }
 }

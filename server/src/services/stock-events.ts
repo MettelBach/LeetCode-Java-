@@ -1,32 +1,22 @@
 /**
- * Stock change notifications. The marketplace sync subscribes to push new
- * quantities to linked offers. Changes are debounced per product.
+ * Stock change notifications, collected per account. The marketplace sync
+ * reads them to know which offers need a stock update.
  */
-type Listener = (productIds: number[]) => void;
+import { currentAccountId, hasTenant } from '../db/index.js';
 
-const listeners: Listener[] = [];
-const pending = new Set<number>();
-let timer: NodeJS.Timeout | null = null;
-
-export function onStockChanged(fn: Listener) {
-  listeners.push(fn);
-}
+const dirty = new Map<number, Set<number>>();
 
 export function emitStockChanged(productId: number) {
-  if (!listeners.length) return;
-  pending.add(productId);
-  if (timer) return;
-  timer = setTimeout(() => {
-    timer = null;
-    const ids = [...pending];
-    pending.clear();
-    for (const l of listeners) {
-      try {
-        l(ids);
-      } catch (e) {
-        console.error('[stock] listener failed', e);
-      }
-    }
-  }, 1500);
-  timer.unref?.();
+  if (!hasTenant()) return;
+  const acc = currentAccountId();
+  if (!dirty.has(acc)) dirty.set(acc, new Set());
+  dirty.get(acc)!.add(productId);
+}
+
+/** Returns and clears the products with changed stock for an account. */
+export function takeDirtyProducts(accountId: number): number[] {
+  const s = dirty.get(accountId);
+  if (!s) return [];
+  dirty.delete(accountId);
+  return [...s];
 }

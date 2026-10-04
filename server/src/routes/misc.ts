@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { db, getSetting, parseJson, setSetting } from '../db/index.js';
+import { db, getSetting, parseJson, platformDb, runWithTenant, setSetting } from '../db/index.js';
 import { HttpError, idParam, q } from '../lib/http.js';
 import { ACTION_TYPES, CONDITION_FIELDS, EVENTS, runRulesFor } from '../services/automation.js';
 import { orderTotal } from '../services/orders.js';
@@ -287,9 +287,16 @@ miscRouter.get('/search', (req, res) => {
 
 export const publicRouter = Router();
 
-publicRouter.get('/order/:id/:token', (req, res) => {
+publicRouter.get('/order/:account/:id/:token', (req, res) => {
+  const accountId = idParam(req, 'account');
+  if (!platformDb.prepare(`SELECT 1 FROM accounts WHERE id = ? AND status != 'closed'`).get(accountId)) throw new HttpError(404, 'Order not found');
+  runWithTenant(accountId, () => publicOrder(req, res));
+});
+
+function publicOrder(req: import('express').Request, res: import('express').Response) {
   const id = idParam(req);
   const token = String(req.params.token);
+  if (!/^[0-9a-f]{24}$/.test(token)) throw new HttpError(404, 'Order not found');
   const o = db.prepare('SELECT * FROM orders WHERE id = ? AND token = ? AND deleted = 0').get(id, token) as any;
   if (!o) throw new HttpError(404, 'Order not found');
   const status = db.prepare('SELECT full_name, name, color FROM order_statuses WHERE id = ?').get(o.status_id) as any;
@@ -318,4 +325,4 @@ publicRouter.get('/order/:id/:token', (req, res) => {
     shipments,
     company: { name: company.name, email: company.email, phone: company.phone },
   });
-});
+}

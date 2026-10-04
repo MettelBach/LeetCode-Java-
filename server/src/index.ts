@@ -1,19 +1,21 @@
 import { createApp } from './app.js';
 import { config } from './config.js';
-import { initDb } from './db/index.js';
+import { initPlatform } from './db/index.js';
 import { registerSyncListeners, startScheduler } from './integrations/sync.js';
 import { registerAutomation } from './services/automation.js';
+import { ensureBootstrapAdmin } from './services/platform.js';
 
-if (config.jwtSecret === 'dev-secret-change-me' && process.env.NODE_ENV === 'production') {
-  console.error('JWT_SECRET must be set in production');
+if (process.env.NODE_ENV === 'production' && (config.jwtSecret === 'dev-secret-change-me' || config.jwtSecret.length < 32)) {
+  console.error('JWT_SECRET must be set to a random string of at least 32 characters in production');
   process.exit(1);
 }
 
-initDb(config.dbFile);
+initPlatform(config.dataDir);
+ensureBootstrapAdmin();
 registerAutomation();
 registerSyncListeners();
 startScheduler();
 
 createApp().listen(config.port, () => {
-  console.log(`SellHub API listening on http://localhost:${config.port}`);
+  console.log(`SellHub listening on http://localhost:${config.port}`);
 });

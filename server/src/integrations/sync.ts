@@ -1,11 +1,19 @@
 import cron from 'node-cron';
 import { config } from '../config.js';
-import { db, parseJson } from '../db/index.js';
+import { db, parseJson, runWithTenant } from '../db/index.js';
 import { notFound } from '../lib/http.js';
 import { onEvent } from '../services/events.js';
 import { addHistory, changeStatus, createOrder, getOrder, statusIdByKey } from '../services/orders.js';
+import {
+  accelOption,
+  accountAccelerations,
+  activeAccountIds,
+  chargeAccelerations,
+  chargeSubscription,
+  refreshAccountStats,
+  updateAccountStatuses,
+} from '../services/platform.js';
 import { advanceSimulatedTracking } from '../services/shipments.js';
-import { onStockChanged } from '../services/stock-events.js';
 import { findProduct } from '../services/stock.js';
 import { AllegroConnector } from './allegro.js';
 import { DemoConnector } from './demo.js';
@@ -114,7 +122,8 @@ export async function syncOrders(id: number) {
       }
       if (mo.importable === false || mo.canceled) continue;
       const { canceled: _c, importable: _i, ...input } = mo;
-      createOrder({ ...input, integration_id: id, status_id: importStatus }, integration.name);
+      const warehouseId = integration.settings.warehouse_id ? Number(integration.settings.warehouse_id) : undefined;
+      createOrder({ ...input, integration_id: id, status_id: importStatus, warehouse_id: warehouseId }, integration.name);
       imported++;
     }
     saveState(id, { orders_cursor: started });
@@ -147,7 +156,7 @@ export async function syncOffers(id: number) {
     let linked = 0;
     db.transaction(() => {
       for (const o of offers) {
-        const p = integration.settings.auto_link ? findProduct(o.sku, o.ean) : undefined;
+        const p = integration.settings.auto_link ? findProduct(o.sku, o.ean, integration.settings.catalog_id ? Number(integration.settings.catalog_id) : null) : undefined;
         if (p) linked++;
         upsert.run({ ...o, integration_id: id, product_id: p?.id ?? null, raw: JSON.stringify(o.raw ?? {}) });
       }
@@ -160,8 +169,25 @@ export async function syncOffers(id: number) {
   }
 }
 
-/** Pushes stock (and optionally price) of linked offers to the marketplace. */
-export async function pushOffers(productIds: number[] | null, opts: { offerIds?: number[]; force?: boolean } = {}) {
+/** Stock of a product as seen by an integration (all warehouses or the selected ones). */
+function offerStock(productId: number, warehouseIds: number[] | undefined): number {
+  if (!warehouseIds?.length) return (db.prepare('SELECT stock FROM products WHERE id = ?').get(productId) as { stock: number } | undefined)?.stock ?? 0;
+  const r = db
+    .prepare(`SELECT COALESCE(SUM(stock), 0) s FROM product_stock WHERE product_id = ? AND warehouse_id IN (${warehouseIds.map(() => '?').join(',')})`)
+    .get(productId, ...warehouseIds) as { s: number };
+  return r.s;
+}
+
+/**
+ * Pushes stock and/or price of linked offers to the marketplaces. Only offers
+ * whose values differ from the inventory are sent unless `force` is set.
+ */
+export async function pushOffers(
+  productIds: number[] | null,
+  opts: { offerIds?: number[]; force?: boolean; stock?: boolean; price?: boolean } = {},
+) {
+  const doStock = opts.stock ?? true;
+  const doPrice = opts.price ?? true;
   let rows: any[];
   if (opts.offerIds?.length) {
     rows = db.prepare(`SELECT * FROM offers WHERE id IN (${opts.offerIds.map(() => '?').join(',')}) AND product_id IS NOT NULL`).all(...opts.offerIds);
@@ -169,14 +195,17 @@ export async function pushOffers(productIds: number[] | null, opts: { offerIds?:
     rows = db.prepare(`SELECT * FROM offers WHERE product_id IN (${productIds.map(() => '?').join(',')})`).all(...productIds);
   } else rows = db.prepare('SELECT * FROM offers WHERE product_id IS NOT NULL').all();
   const results = { updated: 0, failed: 0 };
+  const integrations = new Map<number, ReturnType<typeof loadIntegration>>();
   for (const off of rows) {
-    const integration = loadIntegration(off.integration_id);
-    if (!integration.enabled) continue;
-    const p = db.prepare('SELECT stock, price FROM products WHERE id = ?').get(off.product_id) as { stock: number; price: number } | undefined;
+    if (!integrations.has(off.integration_id)) integrations.set(off.integration_id, loadIntegration(off.integration_id));
+    const integration = integrations.get(off.integration_id)!;
+    if (!integration.enabled || off.status === 'ended') continue;
+    const p = db.prepare('SELECT price FROM products WHERE id = ?').get(off.product_id) as { price: number } | undefined;
     if (!p) continue;
+    const stock = Math.max(0, offerStock(off.product_id, integration.settings.stock_warehouse_ids as number[] | undefined));
     const change: { stock?: number; price?: number } = {};
-    if (integration.settings.sync_stock && off.sync_stock && (opts.force || p.stock !== off.stock)) change.stock = Math.max(0, p.stock);
-    if (integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(p.price - off.price) > 0.001)) change.price = p.price;
+    if (doStock && integration.settings.sync_stock && off.sync_stock && (opts.force || stock !== off.stock)) change.stock = stock;
+    if (doPrice && integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(p.price - off.price) > 0.001)) change.price = p.price;
     if (change.stock === undefined && change.price === undefined) continue;
     // Mirakl (Empik) needs both values in one update.
     if (integration.type === 'empik') {
@@ -246,12 +275,9 @@ export function registerSyncListeners() {
       }
     }
   });
-  onStockChanged((ids) => {
-    pushOffers(ids).catch((e) => console.error('[sync] stock push failed', e));
-  });
 }
 
-export async function syncAll() {
+export async function syncAllOrders() {
   const rows = db.prepare('SELECT id FROM integrations WHERE enabled = 1').all() as { id: number }[];
   for (const r of rows) {
     try {
@@ -260,17 +286,77 @@ export async function syncAll() {
       /* logged in syncOrders */
     }
   }
-  advanceSimulatedTracking();
+}
+
+export async function syncAllOffers() {
+  const rows = db.prepare('SELECT id FROM integrations WHERE enabled = 1').all() as { id: number }[];
+  for (const r of rows) await syncOffers(r.id).catch(() => undefined);
+}
+
+/* --------------------------------- scheduler --------------------------------- */
+
+const lastRun = new Map<string, number>();
+let ticking = false;
+
+function due(accountId: number, kind: string, minutes: number) {
+  const key = `${accountId}:${kind}`;
+  const last = lastRun.get(key);
+  // Spread the first run of each account over the first minutes after start.
+  if (last === undefined) {
+    lastRun.set(key, Date.now() - minutes * 60_000 + ((accountId * 7) % Math.max(1, minutes)) * 60_000);
+    return false;
+  }
+  if (Date.now() - last >= minutes * 60_000 - 5_000) {
+    lastRun.set(key, Date.now());
+    return true;
+  }
+  return false;
+}
+
+/** One scheduler tick: runs due synchronizations for every active account. */
+export async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    for (const accountId of activeAccountIds()) {
+      const accel = accountAccelerations(accountId);
+      try {
+        await runWithTenant(accountId, async () => {
+          const hasIntegrations = !!db.prepare('SELECT 1 FROM integrations WHERE enabled = 1').get();
+          if (hasIntegrations) {
+            if (due(accountId, 'orders', accelOption('orders', accel.orders).minutes)) await syncAllOrders();
+            if (due(accountId, 'stock', accelOption('stock', accel.stock).minutes)) await pushOffers(null, { stock: true, price: false });
+            if (due(accountId, 'price', accelOption('price', accel.price).minutes)) await pushOffers(null, { stock: false, price: true });
+            if (due(accountId, 'offers', 360)) await syncAllOffers();
+          }
+          if (due(accountId, 'tracking', 60)) advanceSimulatedTracking();
+        });
+        if (due(accountId, 'stats', 60)) refreshAccountStats(accountId);
+      } catch (e) {
+        console.error(`[scheduler] account ${accountId}`, e);
+      }
+    }
+  } finally {
+    ticking = false;
+  }
+}
+
+export function dailyJobs(now = new Date()) {
+  updateAccountStatuses();
+  for (const accountId of activeAccountIds()) {
+    try {
+      chargeAccelerations(accountId, now);
+      if (now.getUTCDate() === 1) chargeSubscription(accountId, now);
+    } catch (e) {
+      console.error(`[billing] account ${accountId}`, e);
+    }
+  }
 }
 
 export function startScheduler() {
   if (config.disableScheduler) return;
-  cron.schedule(config.syncCron, () => {
-    syncAll().catch((e) => console.error('[sync] failed', e));
+  cron.schedule('* * * * *', () => {
+    tick().catch((e) => console.error('[scheduler] failed', e));
   });
-  // Offers are refreshed less often.
-  cron.schedule('17 * * * *', async () => {
-    const rows = db.prepare('SELECT id FROM integrations WHERE enabled = 1').all() as { id: number }[];
-    for (const r of rows) await syncOffers(r.id).catch(() => undefined);
-  });
+  cron.schedule('5 0 * * *', () => dailyJobs());
 }

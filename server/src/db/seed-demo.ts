@@ -1,13 +1,19 @@
-/** CLI: `npm run seed` — fills the database with demo data. */
+/**
+ * CLI: creates a demo client account.
+ *   npm run seed -- demo@example.com secret123 "Demo Sklep"
+ */
 import { config } from '../config.js';
-import { initDb } from './index.js';
 import { registerSyncListeners } from '../integrations/sync.js';
 import { registerAutomation } from '../services/automation.js';
 import { seedDemo } from '../services/demo-seed.js';
+import { createAccount } from '../services/platform.js';
+import { initPlatform, runWithTenant } from './index.js';
 
-initDb(config.dbFile);
+const [email = 'demo@sellhub.local', password = 'demo12345', company = 'Demo Sklep'] = process.argv.slice(2);
+initPlatform(config.dataDir);
 registerAutomation();
 registerSyncListeners();
-await seedDemo();
-console.log('Demo data created');
-setTimeout(() => process.exit(0), 3000);
+const { accountId } = createAccount({ company, name: 'Demo', email, password });
+await runWithTenant(accountId, () => seedDemo());
+console.log(`Demo account ${accountId} created: ${email} / ${password}`);
+setTimeout(() => process.exit(0), 2000);

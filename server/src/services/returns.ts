@@ -2,7 +2,7 @@ import { db, parseJson, tx } from '../db/index.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
 import { addHistory, getOrder } from './orders.js';
-import { adjustStock } from './stock.js';
+import { adjustOrderItemStock, adjustStock } from './stock.js';
 
 export interface ReturnItem {
   order_item_id?: number;
@@ -117,7 +117,11 @@ export function returnToStock(id: number, user = 'System') {
   const r = getReturn(id);
   if (r.stock_returned) throw new HttpError(409, 'Stock already returned');
   tx(() => {
-    for (const it of r.items as ReturnItem[]) if (it.product_id) adjustStock(it.product_id, it.quantity, 'return', r.order_id);
+    for (const it of r.items as ReturnItem[]) {
+      if (!it.product_id) continue;
+      if (r.order_id) adjustOrderItemStock(r.order_id, it.product_id, it.quantity, 'return');
+      else adjustStock(it.product_id, it.quantity, 'return');
+    }
     db.prepare('UPDATE returns SET stock_returned = 1 WHERE id = ?').run(id);
   });
   if (r.order_id) addHistory(r.order_id, `Return #${id}: products returned to stock`, 'return', user);
