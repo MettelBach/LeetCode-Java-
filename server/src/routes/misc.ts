@@ -171,7 +171,29 @@ dashboardRouter.get('/', (req, res) => {
         (SELECT COUNT(*) FROM integrations WHERE enabled = 1 AND last_error IS NOT NULL) integration_errors`,
     )
     .get();
-  res.json({ days, daily, by_source: bySource, summary, prev_summary: prevSummary, today, top_products: topProducts, statuses, low_stock: lowStock, to_do: toDo });
+  res.json({ days, daily, by_source: bySource, summary, prev_summary: prevSummary, today, top_products: topProducts, statuses, low_stock: lowStock, to_do: toDo, onboarding: onboarding() });
+});
+
+/** "First steps" checklist shown on the dashboard until it is completed or hidden. */
+function onboarding() {
+  if (getSetting<boolean>('onboarding_dismissed', false)) return null;
+  const company = getSetting<any>('company', {});
+  const has = (sql: string) => !!db.prepare(sql).get();
+  const steps = [
+    { id: 'company', done: !!(company.nip && company.address && company.city), to: '/settings/company' },
+    { id: 'integration', done: has('SELECT 1 FROM integrations WHERE demo = 0'), to: '/integrations/add' },
+    { id: 'products', done: has('SELECT 1 FROM products'), to: '/products' },
+    { id: 'orders', done: has(`SELECT 1 FROM orders WHERE source <> 'manual'`), to: '/orders' },
+    { id: 'invoice', done: has('SELECT 1 FROM invoices'), to: '/orders' },
+    { id: 'shipment', done: has('SELECT 1 FROM shipments'), to: '/orders' },
+    { id: 'automation', done: has('SELECT 1 FROM rules WHERE enabled = 1'), to: '/automation' },
+  ];
+  return { steps, done: steps.filter((x) => x.done).length };
+}
+
+dashboardRouter.post('/onboarding/dismiss', (_req, res) => {
+  setSetting('onboarding_dismissed', true);
+  res.json({ ok: true });
 });
 
 /* ---------------------------------- settings ---------------------------------- */

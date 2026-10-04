@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, FileText, Inbox, PackageX, RotateCcw, Truck } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, CheckCircle2, Circle, FileText, Inbox, PackageX, RotateCcw, Truck, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -19,6 +19,55 @@ function fillDays(daily: { d: string; orders: number; revenue: number }[], days:
     out.push({ d: key, label: `${key.slice(8, 10)}.${key.slice(5, 7)}`, orders: r?.orders ?? 0, revenue: r?.revenue ?? 0 });
   }
   return out;
+}
+
+const STEP_LABELS: Record<string, [string, string]> = {
+  company: ['Fill in company details', 'They are printed on invoices and labels'],
+  integration: ['Connect Allegro, Empik or Kaufland', 'Orders will be downloaded automatically'],
+  products: ['Add products to the inventory', 'Manually, from CSV or from marketplace offers'],
+  orders: ['Download the first marketplace order', 'Usually within 10 minutes after connecting'],
+  invoice: ['Issue an invoice or receipt', 'In the order card → Documents'],
+  shipment: ['Create a shipment and print a label', 'In the order card → Shipments'],
+  automation: ['Turn on an automatic action', 'E.g. "paid → to send" with an e-mail to the buyer'],
+};
+
+function Onboarding({ data }: { data: { steps: { id: string; done: boolean; to: string }[]; done: number } }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const total = data.steps.length;
+  const hide = () => api.post('/dashboard/onboarding/dismiss').then(() => qc.invalidateQueries({ queryKey: ['dashboard'] }));
+  return (
+    <div className="card mb onboarding">
+      <div className="card-head">
+        <div className="card-title">
+          {data.done === total ? t('Everything is set up!') : t('First steps')}
+          <span className="text-muted" style={{ fontSize: 14, marginLeft: 10 }}>
+            {t('{done} of {total} done', { done: data.done, total })}
+          </span>
+        </div>
+        <button className="icon-btn" onClick={hide} aria-label={t('Hide')} title={t('Hide')}>
+          <X size={18} />
+        </button>
+      </div>
+      <div className="onboarding-bar">
+        <span style={{ width: `${(data.done / total) * 100}%` }} />
+      </div>
+      <div className="onboarding-steps">
+        {data.steps.map((s) => {
+          const [title, hint] = STEP_LABELS[s.id] ?? [s.id, ''];
+          return (
+            <Link key={s.id} to={s.to} className={`onboarding-step ${s.done ? 'done' : ''}`}>
+              {s.done ? <CheckCircle2 size={20} /> : <Circle size={20} />}
+              <span>
+                <b>{t(title)}</b>
+                <small>{t(hint)}</small>
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function Delta({ cur, prev }: { cur: number; prev: number }) {
@@ -63,6 +112,8 @@ export default function Dashboard() {
           ))}
         </div>
       </div>
+
+      {d.onboarding && <Onboarding data={d.onboarding} />}
 
       <div className="grid grid-4 mb">
         <div className="card stat">
