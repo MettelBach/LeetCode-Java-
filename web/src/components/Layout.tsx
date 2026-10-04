@@ -95,6 +95,7 @@ function useNav(): NavGroup[] {
         { to: '/settings/invoices', label: t('Invoice numbering') },
         { to: '/settings/email', label: t('E-mail templates') },
         { to: '/settings/users', label: t('Users') },
+        { to: '/settings/api', label: 'API' },
         { to: '/settings/account', label: t('My account') },
         { to: '/settings/subscription', label: t('Subscription') },
       ],

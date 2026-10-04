@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { NavLink, useParams } from 'react-router-dom';
 import { api, setToken } from '../../api';
 import { useAuth } from '../../auth';
+import ApiTab from './ApiTab';
 import { Empty, Field, Loading, Modal, Switch, useAction, useConfirm } from '../../components/ui';
 import { useEmailTemplates, useInvoiceSeries, useSettings, useStatuses, type Status } from '../../data';
 import { COUNTRIES, fmtDate, fmtDateTime, money } from '../../format';
 import { useI18n, useT, type Lang } from '../../i18n';
 
-const TABS = ['company', 'orders', 'statuses', 'invoices', 'email', 'users', 'account', 'subscription'] as const;
+const TABS = ['company', 'orders', 'statuses', 'invoices', 'email', 'users', 'api', 'account', 'subscription'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -19,6 +20,7 @@ const TAB_LABELS: Record<Tab, string> = {
   invoices: 'Invoice numbering',
   email: 'E-mail templates',
   users: 'Users',
+  api: 'API',
   account: 'My account',
   subscription: 'Subscription',
 };
@@ -45,6 +47,7 @@ export default function SettingsPage() {
       {current === 'invoices' && <SeriesTab />}
       {current === 'email' && <EmailTab />}
       {current === 'users' && <UsersTab />}
+      {current === 'api' && <ApiTab />}
       {current === 'account' && <AccountTab />}
       {current === 'subscription' && <SubscriptionTab />}
     </>

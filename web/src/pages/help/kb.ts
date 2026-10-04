@@ -254,4 +254,35 @@ Support can log in to your account only to resolve a ticket — every such login
 Поддержка может войти в ваш аккаунт только для решения обращения — каждый такой вход записывается, а действия помечаются в истории заказов как «Support».`,
     },
   },
+  {
+    slug: 'rest-api',
+    category: 'integrations',
+    title: { pl: 'API — połączenie ze sklepem internetowym lub ERP', en: 'API — connecting your online store or ERP', ru: 'API — подключение интернет-магазина или ERP' },
+    body: {
+      pl: `API pozwala własnemu sklepowi, systemowi ERP lub skryptom pobierać zamówienia, dodawać zamówienia oraz aktualizować stany i ceny produktów.
+
+1. Wejdź w Ustawienia → API i kliknij „Wygeneruj token". Skopiuj token — jest wyświetlany tylko raz.
+2. Wysyłaj zapytania na adres /api/v1 z nagłówkiem X-Api-Token: sh_… (lista metod i przykład są na stronie Ustawienia → API).
+3. Limit to 100 zapytań na minutę. Możesz go zwiększyć do 300 lub 500 w Integracje → Akceleracje.
+4. Token można w każdej chwili unieważnić — integracje, które go używają, przestaną działać.
+
+Wskazówka: do przyrostowego pobierania zamówień używaj parametru id_from (zamówienia od podanego ID).`,
+      en: `The API lets your own store, ERP or scripts download and create orders and update product stock and prices.
+
+1. Go to Settings → API and click "Generate token". Copy the token — it is shown only once.
+2. Send requests to /api/v1 with the header X-Api-Token: sh_… (the list of methods and an example are on the Settings → API page).
+3. The limit is 100 requests per minute. You can raise it to 300 or 500 in Integrations → Accelerations.
+4. A token can be revoked at any time — integrations using it will stop working.
+
+Tip: to download orders incrementally use the id_from parameter (orders from the given ID).`,
+      ru: `API позволяет вашему магазину, ERP или скриптам получать и создавать заказы, обновлять остатки и цены товаров.
+
+1. Откройте Настройки → API и нажмите «Сгенерировать токен». Скопируйте токен — он показывается только один раз.
+2. Отправляйте запросы на адрес /api/v1 с заголовком X-Api-Token: sh_… (список методов и пример — на странице Настройки → API).
+3. Лимит — 100 запросов в минуту. Его можно увеличить до 300 или 500 в разделе Интеграции → Акселерации.
+4. Токен можно отозвать в любой момент — интеграции, которые его используют, перестанут работать.
+
+Совет: для постепенной загрузки заказов используйте параметр id_from (заказы начиная с указанного ID).`,
+    },
+  },
 ];

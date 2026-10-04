@@ -268,4 +268,60 @@ describe('SaaS flow', () => {
     expect(String(csv.data)).toContain(',99.00,PLN');
     expect((await call('GET', '/admin/conversions.csv', undefined, tokenA)).status).toBe(401);
   });
+
+  it('public REST API works with API tokens and respects the API limit', async () => {
+    const login = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
+    const t = login.data.token;
+    const created = await call('POST', '/api-tokens', { name: 'Sklep WWW' }, t);
+    expect(created.status).toBe(201);
+    const key = created.data.token as string;
+    expect(key.startsWith('sh_')).toBe(true);
+    const list = await call('GET', '/api-tokens', undefined, t);
+    expect(list.data.tokens[0].prefix).toBe(key.slice(0, 10));
+    expect(JSON.stringify(list.data)).not.toContain(key);
+
+    const v1 = async (method: string, url: string, body?: unknown, token = key) => {
+      const res = await fetch(base + '/v1' + url, {
+        method,
+        headers: { 'content-type': 'application/json', 'x-api-token': token },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, data: await res.json(), headers: res.headers };
+    };
+    expect((await v1('GET', '/statuses', undefined, 'sh_wrong')).status).toBe(401);
+    expect((await call('GET', '/v1/statuses', undefined, t)).status).toBe(401);
+    const statuses = await v1('GET', '/statuses');
+    expect(statuses.status).toBe(200);
+    expect(statuses.headers.get('x-ratelimit-limit')).toBe('100');
+
+    await call('POST', '/products', { name: 'Kubek API', sku: 'API-1', price: 10, stock: 3 }, t);
+    const stock = await v1('PUT', '/products/stock', { products: [{ sku: 'API-1', stock: 25 }, { sku: 'NOPE', stock: 1 }] });
+    expect(stock.data.results.map((r: any) => r.ok)).toEqual([true, false]);
+    const prices = await v1('PUT', '/products/prices', { products: [{ sku: 'API-1', price: 12.5 }] });
+    expect(prices.data.results[0].ok).toBe(true);
+    const products = await v1('GET', '/products?search=API-1');
+    expect(products.data.rows[0]).toMatchObject({ sku: 'API-1', stock: 25, price: 12.5 });
+
+    const order = await v1('POST', '/orders', {
+      external_id: 'WWW-1', email: 'k@k.pl', delivery_fullname: 'Jan Kowalski', currency: 'PLN',
+      items: [{ product_id: products.data.rows[0].id, name: 'Kubek API', quantity: 2, price: 12.5 }],
+    });
+    expect(order.status).toBe(201);
+    expect((await v1('POST', '/orders', { items: [], hacker: 1 })).status).toBe(400);
+    const full = await v1('GET', `/orders/${order.data.id}`);
+    expect(full.data.external_id).toBe('WWW-1');
+    expect(full.data.history.some((h: any) => h.user_name === 'API: Sklep WWW')).toBe(true);
+    const sent = statuses.data.find((s: any) => s.system_key === 'sent') ?? statuses.data[1];
+    expect((await v1('PUT', `/orders/${order.data.id}/status`, { status_id: sent.id })).data.changed).toBe(true);
+    const inc = await v1('GET', `/orders?id_from=${order.data.id}`);
+    expect(inc.data.rows[0].id).toBe(order.data.id);
+    expect((await v1('GET', '/nothing')).status).toBe(404);
+
+    let last = 0;
+    for (let i = 0; i < 100; i++) last = (await v1('GET', '/warehouses')).status;
+    expect(last).toBe(429);
+
+    await call('DELETE', `/api-tokens/${list.data.tokens[0].id}`, undefined, t);
+    expect((await v1('GET', '/statuses')).status).toBe(401);
+  });
 });

@@ -104,4 +104,15 @@ export const platformMigrations: string[] = [
   `,
   // Marketing attribution captured at sign-up (UTM, gclid, fbclid...).
   `ALTER TABLE accounts ADD COLUMN attribution TEXT NOT NULL DEFAULT '{}';`,
+  `CREATE TABLE api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    prefix TEXT NOT NULL,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT
+  );
+  CREATE INDEX idx_api_tokens_account ON api_tokens(account_id);`,
 ];

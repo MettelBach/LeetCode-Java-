@@ -14,6 +14,7 @@ import { integrationsRouter, offersRouter } from './routes/integrations.js';
 import { dashboardRouter, miscRouter, publicRouter, rulesRouter, settingsRouter } from './routes/misc.js';
 import { ordersRouter } from './routes/orders.js';
 import { productsRouter } from './routes/products.js';
+import { apiTokensRouter, restApiRouter } from './routes/rest-api.js';
 import { statusesRouter } from './routes/statuses.js';
 
 export function createApp() {
@@ -35,6 +36,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/public', publicRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/v1', restApiRouter);
 
   const api = express.Router();
   api.use(requireAuth);
@@ -55,6 +57,7 @@ export function createApp() {
   api.use('/rules', rulesRouter);
   api.use('/dashboard', dashboardRouter);
   api.use('/settings', settingsRouter);
+  api.use('/api-tokens', apiTokensRouter);
   api.use('/', miscRouter);
   app.use('/api', api);
   app.use('/api', (_req, res) => {
