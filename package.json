@@ -1,0 +1,14 @@
+{
+  "name": "sellhub",
+  "private": true,
+  "description": "SellHub — multi-channel e-commerce order management (BaseLinker-style) for Allegro, Empik and Kaufland",
+  "scripts": {
+    "install:all": "npm --prefix server ci && npm --prefix web ci",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build && npm --prefix server run build",
+    "start": "NODE_ENV=production node server/dist/index.js",
+    "test": "npm --prefix server test",
+    "i18n:check": "node web/scripts/i18n-check.mjs"
+  }
+}

@@ -84,3 +84,5 @@
   Публичная страница заказа: /order/<accountId>/<orderId>/<token> (API /api/public/order/...).
   Суперадмин создаётся из ADMIN_EMAIL/ADMIN_PASSWORD при старте.
   Следующий шаг: фронтенд — Login/Register/Forgot/Reset, App-роутер, Settings, Help (Pomoc i kontakt + тикеты), Admin-панель (/admin/*), склады/каталоги/документы UI, менеджер офферов UI, Akceleracje UI, каталог интеграций, подписка; i18n pl/ru.
+- 2026-10-04: фронтенд SaaS готов (auth, /admin, help, склады, офферы, акселерации, настройки, подписка), переводы PL/RU (web/src/i18n, проверка `npm run i18n:check`), Docker/README. Скриншоты сверены.
+  Следующие шаги: (1) docs/MARKETING_PLAN.md — Google Ads + Meta Ads; (2) финальный QA + security review; (3) поиск доработок (публичный API с токенами — нужен для акселерации «лимит API», и др.).

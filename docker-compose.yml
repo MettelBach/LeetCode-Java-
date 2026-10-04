@@ -1,0 +1,12 @@
+services:
+  sellhub:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3001:3001"
+    volumes:
+      - sellhub-data:/data
+
+volumes:
+  sellhub-data:
