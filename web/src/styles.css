@@ -932,7 +932,8 @@ table.tbl {
   display: inline-flex;
   gap: 3px;
   flex-wrap: wrap;
-  max-width: 64px;
+  width: 58px;
+  flex-shrink: 0;
 }
 .ico {
   width: 17px;
@@ -1794,4 +1795,13 @@ input[type='checkbox'] {
   .main {
     margin: 0 !important;
   }
+}
+
+.searchbox-input input {
+  border: 0;
+  outline: 0;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  font-size: 15px;
 }

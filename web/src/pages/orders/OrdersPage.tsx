@@ -208,7 +208,6 @@ export default function OrdersPage() {
                     {t('Additional information')}
                     <span className="sub">({t('shipping method')})</span>
                   </th>
-                  <th />
                   <th className="num">
                     {t('Order date')}
                     <span className="sub">({t('in status')})</span>
@@ -241,7 +240,7 @@ export default function OrdersPage() {
                           </div>
                         )}
                       </td>
-                      <td style={{ minWidth: 150 }}>
+                      <td style={{ minWidth: 130 }}>
                         <div style={{ color: '#4a5057' }}>
                           {o.delivery_country_code && o.delivery_country_code !== 'PL' && <span title={o.delivery_country_code}>{flag(o.delivery_country_code)} </span>}
                           {o.delivery_fullname || o.user_login || o.email || '—'}
@@ -251,7 +250,7 @@ export default function OrdersPage() {
                           {o.integration_name ?? (o.source === 'manual' ? t('Other') : o.source)}
                         </div>
                       </td>
-                      <td className="items-cell" style={{ minWidth: 220 }}>
+                      <td className="items-cell" style={{ minWidth: 180 }}>
                         {o.items.slice(0, 4).map((i: any, idx: number) => (
                           <div key={idx}>
                             <i>{i.quantity}x</i> {i.name}
@@ -272,11 +271,12 @@ export default function OrdersPage() {
                       <td className="num">
                         <span className="price">{money(o.total, o.currency)}</span>
                       </td>
-                      <td style={{ minWidth: 150 }}>
-                        {st && <StatusBadge name={st.short_name || st.name} color={st.color} />}
-                        {o.delivery_method && <div className="date-sub">{o.delivery_method}</div>}
-                      </td>
-                      <td style={{ width: 70 }}>
+                      <td style={{ minWidth: 200 }}>
+                        <div className="row" style={{ alignItems: 'flex-start', gap: 8 }}>
+                          <div className="grow" style={{ minWidth: 0 }}>
+                            {st && <StatusBadge name={st.short_name || st.name} color={st.color} />}
+                            {o.delivery_method && <div className="date-sub">{o.delivery_method}</div>}
+                          </div>
                         <span className="ico-row">
                           <span className={`ico ${paidFull ? 'green' : o.payment_cod ? 'orange' : ''}`} title={paidFull ? t('Paid') : o.payment_cod ? t('Cash on delivery') : t('Not paid')}>
                             {paidFull ? 'P' : o.payment_cod ? 'C' : 'N'}
@@ -287,7 +287,7 @@ export default function OrdersPage() {
                           <span className={`ico ${o.shipment_count ? (o.label_printed ? 'orange' : 'blue') : 'outline'}`} title={o.shipment_count ? t('Shipment created') : t('No shipment')}>
                             <Truck />
                           </span>
-                          {(o.invoice_count > 0 || o.receipt_count > 0 || o.invoice_wanted) && (
+                          {!!(o.invoice_count > 0 || o.receipt_count > 0 || o.invoice_wanted) && (
                             <span
                               className={`ico ${o.invoice_count || o.receipt_count ? 'blue' : 'outline blue'}`}
                               title={o.invoice_count ? t('Invoice issued') : o.receipt_count ? t('Receipt issued') : t('The customer requests an invoice')}
@@ -296,8 +296,9 @@ export default function OrdersPage() {
                             </span>
                           )}
                         </span>
+                        </div>
                       </td>
-                      <td className="num" style={{ fontSize: 13.5 }}>
+                      <td className="num nowrap" style={{ fontSize: 13.5 }}>
                         <div style={{ color: '#4a5057' }}>{fmtDateTime(o.date_add)}</div>
                         <div className="date-sub">{fmtDateTime(o.status_changed_at)}</div>
                       </td>

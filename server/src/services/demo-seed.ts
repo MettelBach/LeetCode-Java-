@@ -1,6 +1,9 @@
 import { db, setSetting, getSetting } from '../db/index.js';
 import { DEMO_PRODUCTS } from '../integrations/demo-data.js';
 import { syncOffers, syncOrders } from '../integrations/sync.js';
+import { changeStatus, statusIdByKey } from './orders.js';
+import { createReturn } from './returns.js';
+import { createShipment } from './shipments.js';
 import { adjustStock } from './stock.js';
 
 /** Fills an empty account with sample products, demo marketplace accounts and rules. */
@@ -103,4 +106,35 @@ export async function seedDemo() {
     await syncOffers(id).catch(() => undefined);
     await syncOrders(id).catch(() => undefined);
   }
+  if (ids.length) shapeDemoOrders();
+}
+
+/** Spreads demo orders over statuses so the panel looks like a working store. */
+function shapeDemoOrders() {
+  const sent = statusIdByKey('sent');
+  const canceled = statusIdByKey('canceled');
+  const fresh = statusIdByKey('new');
+  const orders = db.prepare('SELECT id, date_add, source, payment_cod FROM orders ORDER BY date_add').all() as any[];
+  const couriers: Record<string, string[]> = { allegro: ['allegro', 'inpost'], empik: ['inpost', 'dpd'], kaufland: ['dhl', 'inpost_courier'] };
+  let returned = false;
+  orders.forEach((o, i) => {
+    const ageH = (Date.now() - Date.parse(o.date_add.replace(' ', 'T') + 'Z')) / 3_600_000;
+    try {
+      if (i === 2) changeStatus(o.id, canceled, 'Demo');
+      else if (ageH > 48) {
+        const list = couriers[o.source] ?? ['inpost'];
+        const sid = createShipment(o.id, { courier: list[i % list.length] }, 'Demo');
+        db.prepare(`UPDATE shipments SET status = ?, label_printed = 1 WHERE id = ?`).run(ageH > 96 ? 'delivered' : 'in_transit', sid);
+        changeStatus(o.id, sent, 'Demo');
+        if (!returned && ageH > 96) {
+          createReturn({ order_id: o.id, reason: 'Produkt nie spełnia oczekiwań' }, 'Demo');
+          returned = true;
+        }
+      } else if (ageH < 12 && !o.payment_cod) {
+        db.prepare(`UPDATE orders SET status_id = ?, status_changed_at = date_add WHERE id = ?`).run(fresh, o.id);
+      }
+    } catch (e) {
+      console.error('[demo] shaping order failed', e);
+    }
+  });
 }
