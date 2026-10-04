@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db, parseJson } from '../db/index.js';
 import { HttpError, idParam, q } from '../lib/http.js';
+import { openJson, sealJson } from '../lib/secrets.js';
 import { pollDeviceToken, startDeviceAuth } from '../integrations/allegro.js';
 import { EMPIK_DEFAULT_URL, empikBaseUrl } from '../integrations/empik.js';
 import {
@@ -23,8 +24,8 @@ export const integrationsRouter = Router();
 
 /** Never send secrets back to the browser — only whether they are set. */
 function publicView(row: any) {
-  const creds = parseJson<Record<string, any>>(row.credentials, {});
-  const state = parseJson<Record<string, any>>(row.state, {});
+  const creds = openJson<Record<string, any>>(row.credentials, {});
+  const state = openJson<Record<string, any>>(row.state, {});
   const masked: Record<string, any> = {};
   for (const [k, v] of Object.entries(creds)) {
     masked[k] = /secret|key|password|token/i.test(k) ? (v ? '••••••••' : '') : v;
@@ -112,7 +113,7 @@ integrationsRouter.post('/', requireAdmin, (req, res) => {
   checkCredentials(b.credentials);
   const r = db
     .prepare('INSERT INTO integrations (type, name, demo, credentials, settings) VALUES (?, ?, ?, ?, ?)')
-    .run(b.type, b.name, b.demo ? 1 : 0, JSON.stringify(b.credentials ?? {}), JSON.stringify({ ...DEFAULT_SETTINGS[b.type], ...(b.settings ?? {}) }));
+    .run(b.type, b.name, b.demo ? 1 : 0, sealJson(b.credentials ?? {}), JSON.stringify({ ...DEFAULT_SETTINGS[b.type], ...(b.settings ?? {}) }));
   res.json({ id: Number(r.lastInsertRowid) });
 });
 
@@ -129,7 +130,7 @@ integrationsRouter.put('/:id', requireAdmin, (req, res) => {
     .parse(req.body);
   const row = db.prepare('SELECT * FROM integrations WHERE id = ?').get(id) as any;
   if (!row) throw new HttpError(404, 'Integration not found');
-  const creds = parseJson<Record<string, any>>(row.credentials, {});
+  const creds = openJson<Record<string, any>>(row.credentials, {});
   if (b.credentials) {
     for (const [k, v] of Object.entries(b.credentials)) {
       // Masked values mean "unchanged".
@@ -143,13 +144,13 @@ integrationsRouter.put('/:id', requireAdmin, (req, res) => {
     b.name ?? row.name,
     b.enabled === undefined ? row.enabled : b.enabled ? 1 : 0,
     b.demo === undefined ? row.demo : b.demo ? 1 : 0,
-    JSON.stringify(creds),
+    sealJson(creds),
     JSON.stringify(settings),
     id,
   );
   // Changing the account credentials invalidates the Allegro tokens.
   if (row.type === 'allegro' && b.credentials) {
-    const old = parseJson<any>(row.credentials, {});
+    const old = openJson<any>(row.credentials, {});
     const changed = (k: string) => b.credentials![k] !== undefined && b.credentials![k] !== '••••••••' && b.credentials![k] !== old[k];
     if (changed('client_id') || changed('sandbox')) saveState(id, { access_token: null, refresh_token: null, expires_at: null });
   }

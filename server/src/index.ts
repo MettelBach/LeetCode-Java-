@@ -10,6 +10,10 @@ if (process.env.NODE_ENV === 'production' && (config.jwtSecret === 'dev-secret-c
   process.exit(1);
 }
 
+if (process.env.NODE_ENV === 'production' && !process.env.SECRETS_KEY) {
+  console.warn('[security] SECRETS_KEY is not set — marketplace credentials are encrypted with a key derived from JWT_SECRET');
+}
+
 initPlatform(config.dataDir);
 ensureBootstrapAdmin();
 registerAutomation();

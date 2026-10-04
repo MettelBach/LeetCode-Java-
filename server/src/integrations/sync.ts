@@ -1,5 +1,7 @@
 import cron from 'node-cron';
 import { sendLifecycleMails } from '../services/lifecycle-mail.js';
+import { openJson, sealJson } from '../lib/secrets.js';
+import { backupAll } from '../services/backup.js';
 import { config } from '../config.js';
 import { db, parseJson, runWithTenant } from '../db/index.js';
 import { notFound } from '../lib/http.js';
@@ -33,16 +35,16 @@ export function loadIntegration(id: number): IntegrationRow {
   if (!r) throw notFound('Integration not found');
   return {
     ...r,
-    credentials: parseJson(r.credentials, {}),
+    credentials: openJson(r.credentials, {}),
     settings: { ...DEFAULT_SETTINGS[r.type], ...parseJson(r.settings, {}) },
-    state: parseJson(r.state, {}),
+    state: openJson(r.state, {}),
   };
 }
 
 export function saveState(id: number, patch: Record<string, unknown>) {
   const r = db.prepare('SELECT state FROM integrations WHERE id = ?').get(id) as { state: string } | undefined;
   if (!r) return;
-  db.prepare('UPDATE integrations SET state = ? WHERE id = ?').run(JSON.stringify({ ...parseJson(r.state, {}), ...patch }), id);
+  db.prepare('UPDATE integrations SET state = ? WHERE id = ?').run(sealJson({ ...openJson(r.state, {}), ...patch }), id);
 }
 
 export function syncLog(integrationId: number, message: string, level: 'info' | 'warn' | 'error' = 'info') {
@@ -360,6 +362,13 @@ export function startScheduler() {
     tick().catch((e) => console.error('[scheduler] failed', e));
   });
   cron.schedule('5 0 * * *', () => dailyJobs());
+  if (process.env.BACKUP_DIR) {
+    cron.schedule('30 3 * * *', () => {
+      backupAll()
+        .then((r) => console.log(`[backup] ${r.dir}: ${r.tenants} client databases`))
+        .catch((e) => console.error('[backup] failed', e));
+    });
+  }
   // Onboarding e-mails go out in the morning, Polish time.
   cron.schedule('0 9 * * *', () => {
     sendLifecycleMails().catch((e) => console.error('[lifecycle] failed', e));

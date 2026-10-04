@@ -11,16 +11,16 @@ RUN npm --prefix web run build && npm --prefix server run build && npm --prefix 
 
 # ---- runtime ----
 FROM node:22-bookworm-slim
-ENV NODE_ENV=production PORT=3001 DATA_DIR=/data
+ENV NODE_ENV=production PORT=3001 DATA_DIR=/data BACKUP_DIR=/backups
 WORKDIR /app
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/server/node_modules server/node_modules
 COPY --from=build /app/server/package.json server/package.json
 COPY --from=build /app/server/assets server/assets
 COPY --from=build /app/web/dist web/dist
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data /backups && chown node:node /data /backups
 USER node
-VOLUME ["/data"]
+VOLUME ["/data", "/backups"]
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "server/dist/index.js"]

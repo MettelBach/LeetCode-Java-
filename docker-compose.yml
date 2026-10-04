@@ -7,6 +7,8 @@ services:
       - "3001:3001"
     volumes:
       - sellhub-data:/data
+      - sellhub-backups:/backups
 
 volumes:
   sellhub-data:
+  sellhub-backups:

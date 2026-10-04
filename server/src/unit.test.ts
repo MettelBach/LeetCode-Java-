@@ -3,6 +3,12 @@ import { mapCheckoutForm } from './integrations/allegro.js';
 import { empikBaseUrl, iso2, mapMiraklOrder } from './integrations/empik.js';
 import { isPrivateIp } from './lib/net.js';
 import { dueMessage } from './services/lifecycle-mail.js';
+import { openJson, sealJson } from './lib/secrets.js';
+import { backupAll } from './services/backup.js';
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { kauflandSignature, mapOrderUnits } from './integrations/kaufland.js';
 import { testCondition } from './services/automation.js';
 import { computeTotals, formatNumber } from './services/invoices.js';
@@ -139,5 +145,40 @@ describe('lifecycle e-mails', () => {
     expect(dueMessage(acc({ trial_ends_at: '2026-10-12 10:00:00' }), now, true, ['automation'])).toBe('trial_ending');
     expect(dueMessage(acc({ status: 'suspended', trial_ends_at: '2026-10-08 10:00:00' }), now, true, [])).toBe('trial_ended');
     expect(dueMessage(acc({ status: 'suspended', trial_ends_at: '2026-10-08 10:00:00', paid_until: '2026-10-01 00:00:00' }), now, true, [])).toBeNull();
+  });
+});
+
+describe('stored secrets', () => {
+  it('encrypts and decrypts, accepts legacy plain JSON, rejects tampering', () => {
+    const sealed = sealJson({ api_key: 'secret-123' });
+    expect(sealed.startsWith('enc:v1:')).toBe(true);
+    expect(sealed).not.toContain('secret-123');
+    expect(openJson(sealed, {})).toEqual({ api_key: 'secret-123' });
+    expect(openJson('{"a":1}', {})).toEqual({ a: 1 });
+    const parts = sealed.split(':');
+    parts[4] = Buffer.from('{"api_key":"x"}').toString('base64');
+    expect(openJson(parts.join(':'), { broken: true })).toEqual({ broken: true });
+  });
+});
+
+describe('backups', () => {
+  it('copies platform and client databases and prunes old backups', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sh-bk-'));
+    const data = path.join(root, 'data');
+    fs.mkdirSync(path.join(data, 'tenants'), { recursive: true });
+    for (const f of ['platform.db', 'tenants/1001.db']) {
+      const d = new Database(path.join(data, f));
+      d.exec('CREATE TABLE t (x); INSERT INTO t VALUES (42);');
+      d.close();
+    }
+    const out = path.join(root, 'backups');
+    fs.mkdirSync(path.join(out, '2026-01-01_0330'), { recursive: true });
+    const r = await backupAll(out, data, new Date('2026-10-04T03:30:00Z'));
+    expect(r.tenants).toBe(1);
+    const copy = new Database(path.join(r.dir, 'tenants', '1001.db'), { readonly: true });
+    expect((copy.prepare('SELECT x FROM t').get() as any).x).toBe(42);
+    copy.close();
+    expect(fs.existsSync(path.join(out, '2026-01-01_0330'))).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
