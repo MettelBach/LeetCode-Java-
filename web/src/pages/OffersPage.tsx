@@ -1,9 +1,9 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpFromLine, ExternalLink, Link2, Link2Off, PackagePlus, RefreshCw, Search } from 'lucide-react';
+import { ArrowUpFromLine, ChevronDown, ExternalLink, Link2, Link2Off, PackagePlus, Plus, RefreshCw, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import { Empty, Field, Loading, MarketplaceLogo, Modal, Pager, Switch, useAction, useToast } from '../components/ui';
+import { DdItem, Dropdown, Empty, Field, Loading, MarketplaceLogo, Modal, Pager, Switch, useAction, useConfirm, useToast } from '../components/ui';
 import { useIntegrations } from '../data';
 import { fmtDateTime, money } from '../format';
 import { useT } from '../i18n';
@@ -19,9 +19,18 @@ export default function OffersPage() {
   const [selected, setSelected] = useState<number[]>([]);
   const [linking, setLinking] = useState<any | null>(null);
   const [editing, setEditing] = useState<any | null>(null);
+  const [priceModal, setPriceModal] = useState(false);
+  const confirm = useConfirm();
   const integrationId = params.get('integration_id');
   const page = Number(params.get('page') ?? 1);
-  const query = { integration_id: integrationId ?? undefined, search: params.get('search') ?? undefined, linked: params.get('linked') ?? undefined, page, per_page: 50 };
+  const query = {
+    integration_id: integrationId ?? undefined,
+    search: params.get('search') ?? undefined,
+    linked: params.get('linked') ?? undefined,
+    status: params.get('status') ?? undefined,
+    page,
+    per_page: 50,
+  };
   const q = useQuery({ queryKey: ['offers', query], queryFn: () => api.get<any>('/offers', query), placeholderData: keepPreviousData });
   useEffect(() => setSelected([]), [JSON.stringify(query)]);
   const setParam = (patch: Record<string, string | null>) => {
@@ -52,10 +61,13 @@ export default function OffersPage() {
               <MarketplaceLogo type={current.type} size={36} /> {current.name}
             </span>
           ) : (
-            t('Marketplace offers')
+            t('Manage offers')
           )}
         </h1>
         <div className="spacer" />
+        <Link to="/products" className="btn btn-pill" title={t('Select products in the inventory and use "List on marketplace"')}>
+          <Plus /> {t('List new offers')}
+        </Link>
         <button className="btn btn-pill" onClick={syncOffers}>
           <RefreshCw /> {t('Download offers')}
         </button>
@@ -108,6 +120,51 @@ export default function OffersPage() {
             </option>
           ))}
         </select>
+        <select className="select" style={{ width: 170 }} value={params.get('status') ?? ''} onChange={(e) => setParam({ status: e.target.value || null })}>
+          <option value="">{t('Any status')}</option>
+          <option value="active">{t('Active')}</option>
+          <option value="ended">{t('Ended')}</option>
+          <option value="inactive">{t('Inactive')}</option>
+          <option value="pending">{t('Pending')}</option>
+        </select>
+        <Dropdown
+          trigger={(_o, toggle) => (
+            <button className="btn" onClick={() => (selected.length ? toggle() : toast(t('Select offers first'), 'error'))}>
+              {t('Bulk actions')} {selected.length > 0 && <b>({selected.length})</b>} <ChevronDown size={15} />
+            </button>
+          )}
+        >
+          {(close) => (
+            <>
+              <DdItem
+                onClick={async () => {
+                  close();
+                  if (!(await confirm(t('End {n} offers on the marketplace?', { n: selected.length }), { danger: true }))) return;
+                  const r = await run(() => api.post('/offers/bulk-status', { ids: selected, active: false }));
+                  if (r) {
+                    toast(t('Done: {n}', { n: r.ok }) + (r.errors.length ? ` · ${t('Errors')}: ${r.errors.length}` : ''), r.errors.length ? 'error' : 'success');
+                    refresh();
+                  }
+                }}
+              >
+                {t('End offers')}
+              </DdItem>
+              <DdItem
+                onClick={async () => {
+                  close();
+                  const r = await run(() => api.post('/offers/bulk-status', { ids: selected, active: true }));
+                  if (r) {
+                    toast(t('Done: {n}', { n: r.ok }) + (r.errors.length ? ` · ${t('Errors')}: ${r.errors.length}` : ''), r.errors.length ? 'error' : 'success');
+                    refresh();
+                  }
+                }}
+              >
+                {t('Activate / renew offers')}
+              </DdItem>
+              <DdItem onClick={() => (setPriceModal(true), close())}>{t('Change prices by %')}</DdItem>
+            </>
+          )}
+        </Dropdown>
         <select className="select" style={{ width: 200 }} value={params.get('linked') ?? ''} onChange={(e) => setParam({ linked: e.target.value || null })}>
           <option value="">{t('Linked and unlinked')}</option>
           <option value="yes">{t('Linked with inventory')}</option>
@@ -154,6 +211,9 @@ export default function OffersPage() {
                         <div>
                           <div style={{ color: '#2f343a' }}>{o.title}</div>
                           <div className="text-muted text-small">
+                            <span className={`badge-soft ${['active', 'available'].includes(o.status) ? 'green' : o.status === 'ended' ? 'red' : ''}`} style={{ marginRight: 6 }}>
+                              {t(o.status)}
+                            </span>
                             {o.integration_name} · {o.external_id}{' '}
                             {o.url && (
                               <a href={o.url} target="_blank" rel="noreferrer" aria-label={t('Open on marketplace')}>
@@ -211,6 +271,7 @@ export default function OffersPage() {
       </div>
       {linking && <LinkModal offer={linking} onClose={() => setLinking(null)} onDone={refresh} />}
       {editing && <EditOfferModal offer={editing} onClose={() => setEditing(null)} onDone={refresh} />}
+      {priceModal && <BulkPriceModal ids={selected} onClose={() => setPriceModal(false)} onDone={refresh} />}
     </>
   );
 }
@@ -307,6 +368,44 @@ function EditOfferModal({ offer, onClose, onDone }: { offer: any; onClose: () =>
           <input className="input" value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" />
         </Field>
       </div>
+    </Modal>
+  );
+}
+
+function BulkPriceModal({ ids, onClose, onDone }: { ids: number[]; onClose: () => void; onDone: () => void }) {
+  const t = useT();
+  const run = useAction();
+  const toast = useToast();
+  const [pct, setPct] = useState('');
+  return (
+    <Modal
+      title={t('Change prices of {n} offers', { n: ids.length })}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {t('Cancel')}
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={!Number(pct.replace(',', '.'))}
+            onClick={async () => {
+              const r = await run(() => api.post('/offers/bulk-price', { ids, percent: Number(pct.replace(',', '.')) }));
+              if (r) {
+                toast(t('Done: {n}', { n: r.ok }) + (r.errors.length ? ` · ${t('Errors')}: ${r.errors.length}` : ''), r.errors.length ? 'error' : 'success');
+                onDone();
+                onClose();
+              }
+            }}
+          >
+            {t('Send to marketplace')}
+          </button>
+        </>
+      }
+    >
+      <Field label={t('Change (%)')} help={t('e.g. 10 raises prices by 10%, -5 lowers by 5%')}>
+        <input className="input" value={pct} onChange={(e) => setPct(e.target.value)} inputMode="decimal" autoFocus />
+      </Field>
     </Modal>
   );
 }

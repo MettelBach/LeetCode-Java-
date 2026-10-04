@@ -1,14 +1,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { api, getToken, setToken, setUnauthorizedHandler } from './api';
+import { api, getToken, isImpersonating, setImpersonationToken, setToken, setUnauthorizedHandler } from './api';
 import { useI18n, type Lang } from './i18n';
 
 export interface User {
   id: number;
+  account_id: number;
   email: string;
   name: string;
-  role: 'admin' | 'user';
+  role: 'owner' | 'admin' | 'user';
   language: Lang;
+  impersonator: { id: number; name: string; email: string } | null;
+  account: { id: number; name: string; plan: string; plan_name: string; status: 'trial' | 'active' | 'suspended' | 'closed'; trial_ends_at: string | null; paid_until: string | null };
 }
 
 interface AuthCtx {
@@ -17,6 +20,7 @@ interface AuthCtx {
   login: (token: string) => Promise<void>;
   logout: () => void;
   refresh: () => void;
+  isAdmin: boolean;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
@@ -31,7 +35,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     staleTime: 5 * 60_000,
   });
   const logout = useCallback(() => {
-    setToken(null);
+    if (isImpersonating()) {
+      setImpersonationToken(null);
+      window.close();
+    } else setToken(null);
     qc.clear();
     qc.setQueryData(['me'], null);
   }, [qc]);
@@ -42,8 +49,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [qc]);
   useEffect(() => {
-    if (me.data?.language) setLang(me.data.language);
-  }, [me.data?.language, setLang]);
+    // Support staff keep their own language while impersonating.
+    if (me.data?.language && !me.data.impersonator) setLang(me.data.language);
+  }, [me.data?.language, me.data?.impersonator, setLang]);
   const login = useCallback(
     async (token: string) => {
       setToken(token);
@@ -51,14 +59,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     [qc],
   );
+  const user = me.data ?? null;
   return (
     <Ctx.Provider
       value={{
-        user: me.data ?? null,
+        user,
         loading: me.isLoading,
         login,
         logout,
         refresh: () => qc.invalidateQueries({ queryKey: ['me'] }),
+        isAdmin: !!user && (user.role !== 'user' || !!user.impersonator),
       }}
     >
       {children}

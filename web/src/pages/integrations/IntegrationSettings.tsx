@@ -7,6 +7,7 @@ import { Empty, Field, Loading, MarketplaceLogo, Switch, Tabs, useAction, useCon
 import { useInvalidateOrders, useStatuses, type Integration } from '../../data';
 import { fmtDateTime } from '../../format';
 import { useT } from '../../i18n';
+import { useCatalogs, useWarehouses } from '../products/Warehouses';
 
 type Tab = 'connection' | 'orders' | 'products' | 'log';
 
@@ -280,6 +281,7 @@ function OrdersTab({ i, codes, onSaved }: { i: Integration; codes: string[]; onS
   const t = useT();
   const run = useAction();
   const statuses = useStatuses();
+  const warehouses = useWarehouses();
   const [s, setS] = useState<Record<string, any>>({ ...i.settings, status_map: { ...(i.settings.status_map ?? {}) } });
   const [days, setDays] = useState('7');
   const save = async () => {
@@ -293,6 +295,7 @@ function OrdersTab({ i, codes, onSaved }: { i: Integration; codes: string[]; onS
             send_tracking: !!s.send_tracking,
             sync_cancel: !!s.sync_cancel,
             auto_accept: !!s.auto_accept,
+            warehouse_id: s.warehouse_id ? Number(s.warehouse_id) : null,
           },
         }),
       t('Saved'),
@@ -309,6 +312,16 @@ function OrdersTab({ i, codes, onSaved }: { i: Integration; codes: string[]; onS
             {statuses.data?.statuses.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t('Fulfil orders from warehouse (stock deduction)')}>
+          <select className="select" value={s.warehouse_id ?? ''} onChange={(e) => setS({ ...s, warehouse_id: e.target.value })}>
+            <option value="">{t('Default warehouse')}</option>
+            {warehouses.data?.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
               </option>
             ))}
           </select>
@@ -398,9 +411,23 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
   const t = useT();
   const run = useAction();
   const toast = useToast();
-  const [s, setS] = useState<Record<string, any>>({ ...i.settings });
+  const warehouses = useWarehouses();
+  const catalogs = useCatalogs();
+  const [s, setS] = useState<Record<string, any>>({ ...i.settings, stock_warehouse_ids: i.settings.stock_warehouse_ids ?? [] });
   const save = async () => {
-    const r = await run(() => api.put(`/integrations/${i.id}`, { settings: { sync_stock: !!s.sync_stock, sync_price: !!s.sync_price, auto_link: !!s.auto_link } }), t('Saved'));
+    const r = await run(
+      () =>
+        api.put(`/integrations/${i.id}`, {
+          settings: {
+            sync_stock: !!s.sync_stock,
+            sync_price: !!s.sync_price,
+            auto_link: !!s.auto_link,
+            catalog_id: s.catalog_id ? Number(s.catalog_id) : null,
+            stock_warehouse_ids: s.stock_warehouse_ids,
+          },
+        }),
+      t('Saved'),
+    );
     if (r) onSaved();
   };
   return (
@@ -416,6 +443,35 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
         <label className="check-label">
           <Switch checked={!!s.sync_price} onChange={(v) => setS({ ...s, sync_price: v })} /> {t('Send inventory prices to linked offers')}
         </label>
+      </div>
+      <div className="form-grid mt">
+        <Field label={t('Catalog for this account')} help={t('Offers are linked with products of this catalog')}>
+          <select className="select" value={s.catalog_id ?? ''} onChange={(e) => setS({ ...s, catalog_id: e.target.value })}>
+            <option value="">{t('All catalogs')}</option>
+            {catalogs.data?.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t('Stock sent to offers comes from')}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6 }}>
+            {warehouses.data?.map((w) => (
+              <label key={w.id} className="check-label">
+                <input
+                  type="checkbox"
+                  checked={s.stock_warehouse_ids.includes(w.id)}
+                  onChange={(e) =>
+                    setS({ ...s, stock_warehouse_ids: e.target.checked ? [...s.stock_warehouse_ids, w.id] : s.stock_warehouse_ids.filter((x: number) => x !== w.id) })
+                  }
+                />
+                {w.name}
+              </label>
+            ))}
+            <span className="help-text">{t('None selected = sum of all warehouses')}</span>
+          </div>
+        </Field>
       </div>
       <div className="row mt">
         <button className="btn btn-primary" onClick={save}>

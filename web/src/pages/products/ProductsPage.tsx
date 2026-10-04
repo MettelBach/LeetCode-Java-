@@ -1,11 +1,13 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Download, Package, Plus, Search, Upload } from 'lucide-react';
+import { ChevronDown, Download, Package, Plus, Search, Store, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../api';
 import { DdItem, Dropdown, Empty, Field, Loading, Modal, Pager, useAction, useConfirm, useToast } from '../../components/ui';
 import { money } from '../../format';
 import { useT } from '../../i18n';
+import { ListOnMarketplaceModal } from '../offers/ListModal';
+import { useCatalogs, useWarehouses } from './Warehouses';
 
 export function useCategories() {
   return useQuery({ queryKey: ['categories'], queryFn: () => api.get<any[]>('/products/meta/categories') });
@@ -23,12 +25,25 @@ export default function ProductsPage() {
   const toast = useToast();
   const cats = useCategories();
   const mans = useManufacturers();
+  const catalogs = useCatalogs();
+  const warehouses = useWarehouses();
+  const [listing, setListing] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
   const [search, setSearch] = useState(params.get('search') ?? '');
   const [importing, setImporting] = useState(false);
-  const [bulkModal, setBulkModal] = useState<null | 'price_percent' | 'set_stock' | 'set_category' | 'set_tax'>(null);
+  const [bulkModal, setBulkModal] = useState<null | 'price_percent' | 'set_stock' | 'set_category' | 'set_tax' | 'set_catalog'>(null);
   const page = Number(params.get('page') ?? 1);
+  const storedCatalog = (() => {
+    try {
+      return localStorage.getItem('sellhub_catalog') ?? '';
+    } catch {
+      return '';
+    }
+  })();
+  const catalogId = params.get('catalog_id') ?? storedCatalog;
   const query = {
+    catalog_id: catalogId || undefined,
+    warehouse_id: params.get('warehouse_id') ?? undefined,
     search: params.get('search') ?? undefined,
     category_id: params.get('category_id') ?? undefined,
     manufacturer_id: params.get('manufacturer_id') ?? undefined,
@@ -55,6 +70,35 @@ export default function ProductsPage() {
     <>
       <div className="page-head">
         <h1 className="page-title">{t('Inventory')}</h1>
+        <select
+          className="select"
+          style={{ width: 220, height: 40 }}
+          value={catalogId}
+          aria-label={t('Catalog')}
+          onChange={(e) => {
+            try {
+              localStorage.setItem('sellhub_catalog', e.target.value);
+            } catch {
+              /* ignore */
+            }
+            setParam({ catalog_id: e.target.value || null });
+          }}
+        >
+          <option value="">{t('All catalogs')}</option>
+          {catalogs.data?.map((c) => (
+            <option key={c.id} value={c.id}>
+              {t('Catalog')}: {c.name}
+            </option>
+          ))}
+        </select>
+        <select className="select" style={{ width: 220, height: 40 }} value={query.warehouse_id ?? ''} onChange={(e) => setParam({ warehouse_id: e.target.value || null })} aria-label={t('Warehouse')}>
+          <option value="">{t('Stock: all warehouses')}</option>
+          {warehouses.data?.map((w) => (
+            <option key={w.id} value={w.id}>
+              {t('Stock')}: {w.name}
+            </option>
+          ))}
+        </select>
         <div className="spacer" />
         <button className="btn btn-pill" onClick={() => setImporting(true)}>
           <Upload /> {t('Import CSV')}
@@ -62,7 +106,10 @@ export default function ProductsPage() {
         <button className="btn btn-pill" onClick={() => run(() => api.download('/products/export.csv', 'products.csv'))}>
           <Download /> {t('Export CSV')}
         </button>
-        <Link to="/products/new" className="btn btn-primary btn-pill" style={{ height: 44, padding: '0 22px' }}>
+        <button className="btn btn-pill" onClick={() => (selected.length ? setListing(true) : toast(t('Select products first'), 'error'))}>
+          <Store /> {t('List on marketplace')}
+        </button>
+        <Link to={`/products/new${catalogId ? `?catalog_id=${catalogId}` : ''}`} className="btn btn-primary btn-pill" style={{ height: 44, padding: '0 22px' }}>
           <Plus /> {t('Add product')}
         </Link>
       </div>
@@ -114,6 +161,8 @@ export default function ProductsPage() {
               <DdItem onClick={() => (setBulkModal('set_stock'), close())}>{t('Set stock')}</DdItem>
               <DdItem onClick={() => (setBulkModal('set_category'), close())}>{t('Set category')}</DdItem>
               <DdItem onClick={() => (setBulkModal('set_tax'), close())}>{t('Set VAT rate')}</DdItem>
+              <DdItem onClick={() => (setBulkModal('set_catalog'), close())}>{t('Move to catalog')}</DdItem>
+              <DdItem onClick={() => (setListing(true), close())}>{t('List on marketplace')}</DdItem>
               <div className="dd-sep" />
               <DdItem
                 danger
@@ -223,12 +272,15 @@ export default function ProductsPage() {
           </table>
         )}
       </div>
-      {importing && <ImportModal onClose={() => setImporting(false)} onDone={refresh} />}
+      {importing && <ImportModal catalogId={catalogId ? Number(catalogId) : undefined} onClose={() => setImporting(false)} onDone={refresh} />}
+      {listing && <ListOnMarketplaceModal productIds={selected} onClose={() => setListing(false)} onDone={() => setSelected([])} />}
       {bulkModal && (
         <BulkModal
           action={bulkModal}
           ids={selected}
           categories={cats.data ?? []}
+          catalogs={catalogs.data ?? []}
+          warehouses={warehouses.data ?? []}
           onClose={() => setBulkModal(null)}
           onDone={() => {
             refresh();
@@ -240,15 +292,33 @@ export default function ProductsPage() {
   );
 }
 
-function BulkModal({ action, ids, categories, onClose, onDone }: { action: string; ids: number[]; categories: any[]; onClose: () => void; onDone: () => void }) {
+function BulkModal({
+  action,
+  ids,
+  categories,
+  catalogs,
+  warehouses,
+  onClose,
+  onDone,
+}: {
+  action: string;
+  ids: number[];
+  categories: any[];
+  catalogs: any[];
+  warehouses: any[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const t = useT();
   const run = useAction();
-  const [value, setValue] = useState('');
+  const [value, setValue] = useState(action === 'set_catalog' ? String(catalogs[0]?.id ?? '') : '');
+  const [wh, setWh] = useState(String(warehouses.find((w) => w.is_default)?.id ?? ''));
   const titles: Record<string, string> = {
     price_percent: t('Change price by %'),
     set_stock: t('Set stock'),
     set_category: t('Set category'),
     set_tax: t('Set VAT rate'),
+    set_catalog: t('Move to catalog'),
   };
   return (
     <Modal
@@ -262,7 +332,10 @@ function BulkModal({ action, ids, categories, onClose, onDone }: { action: strin
           <button
             className="btn btn-primary"
             onClick={async () => {
-              const r = await run(() => api.post('/products/bulk', { ids, action, value: value.replace(',', '.') }), t('Saved'));
+              const r = await run(
+                () => api.post('/products/bulk', { ids, action, value: value.replace(',', '.'), warehouse_id: action === 'set_stock' && wh ? Number(wh) : undefined }),
+                t('Saved'),
+              );
               if (r) {
                 onDone();
                 onClose();
@@ -274,7 +347,26 @@ function BulkModal({ action, ids, categories, onClose, onDone }: { action: strin
         </>
       }
     >
-      {action === 'set_category' ? (
+      {action === 'set_stock' && (
+        <Field label={t('Warehouse')}>
+          <select className="select" value={wh} onChange={(e) => setWh(e.target.value)}>
+            {warehouses.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      {action === 'set_catalog' ? (
+        <select className="select" value={value} onChange={(e) => setValue(e.target.value)}>
+          {catalogs.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      ) : action === 'set_category' ? (
         <select className="select" value={value} onChange={(e) => setValue(e.target.value)}>
           <option value="">{t('No category')}</option>
           {categories.map((c) => (
@@ -292,7 +384,7 @@ function BulkModal({ action, ids, categories, onClose, onDone }: { action: strin
   );
 }
 
-function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+function ImportModal({ catalogId, onClose, onDone }: { catalogId?: number; onClose: () => void; onDone: () => void }) {
   const t = useT();
   const run = useAction();
   const [csv, setCsv] = useState('');
@@ -310,7 +402,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
             className="btn btn-primary"
             disabled={!csv.trim()}
             onClick={async () => {
-              const r = await run(() => api.post('/products/import', { csv }));
+              const r = await run(() => api.post('/products/import', { csv, catalog_id: catalogId }));
               if (r) {
                 alert(t('Created: {c}, updated: {u}', { c: r.created, u: r.updated }));
                 onDone();

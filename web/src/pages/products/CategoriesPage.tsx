@@ -51,14 +51,15 @@ function ListEditor({ kind, title, rows }: { kind: 'categories' | 'manufacturers
                       className="row"
                       onSubmit={async (e) => {
                         e.preventDefault();
-                        const ok = await run(() => api.put(`/products/meta/${kind}/${r.id}`, { name: editing.name }));
+                        const name = editing!.name;
+                        const ok = await run(() => api.put(`/products/meta/${kind}/${r.id}`, { name }));
                         if (ok) {
                           setEditing(null);
                           refresh();
                         }
                       }}
                     >
-                      <input className="input input-sm" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} autoFocus />
+                      <input className="input input-sm" value={editing!.name} onChange={(e) => setEditing({ id: r.id, name: e.target.value })} autoFocus />
                       <button className="btn btn-sm btn-primary">{t('Save')}</button>
                     </form>
                   ) : (

@@ -1,20 +1,46 @@
+/*
+ * API clients. Three kinds of tokens:
+ *  - client user token (localStorage)
+ *  - support impersonation token (sessionStorage — only in the tab opened from the admin panel)
+ *  - staff token for the admin panel (localStorage, separate key)
+ */
 const TOKEN_KEY = 'sellhub_token';
+const IMP_KEY = 'sellhub_imp_token';
+const STAFF_KEY = 'sellhub_staff_token';
 
-export function getToken(): string | null {
+function storageGet(s: Storage | undefined, k: string): string | null {
   try {
-    return localStorage.getItem(TOKEN_KEY);
+    return s?.getItem(k) ?? null;
   } catch {
     return null;
   }
 }
-
-export function setToken(token: string | null) {
+function storageSet(s: Storage | undefined, k: string, v: string | null) {
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
+    if (v) s?.setItem(k, v);
+    else s?.removeItem(k);
   } catch {
     /* storage unavailable */
   }
+}
+
+export function getToken(): string | null {
+  return storageGet(window.sessionStorage, IMP_KEY) ?? storageGet(window.localStorage, TOKEN_KEY);
+}
+export function setToken(token: string | null) {
+  storageSet(window.localStorage, TOKEN_KEY, token);
+}
+export function isImpersonating() {
+  return !!storageGet(window.sessionStorage, IMP_KEY);
+}
+export function setImpersonationToken(token: string | null) {
+  storageSet(window.sessionStorage, IMP_KEY, token);
+}
+export function getStaffToken() {
+  return storageGet(window.localStorage, STAFF_KEY);
+}
+export function setStaffToken(token: string | null) {
+  storageSet(window.localStorage, STAFF_KEY, token);
 }
 
 export class ApiError extends Error {
@@ -42,76 +68,90 @@ export function qs(query?: Query): string {
   return s ? `?${s}` : '';
 }
 
-let onUnauthorized: (() => void) | null = null;
-export function setUnauthorizedHandler(fn: () => void) {
-  onUnauthorized = fn;
-}
-
-async function raw(method: string, path: string, body?: unknown): Promise<Response> {
-  const headers: Record<string, string> = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`/api${path}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
-  if (res.status === 401 && !path.startsWith('/auth/')) {
-    setToken(null);
-    onUnauthorized?.();
-  }
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    let details;
-    try {
-      const j = await res.json();
-      msg = j.error ?? msg;
-      details = j.details;
-      if (details?.length) msg += ': ' + details.map((d: any) => `${d.path} — ${d.message}`).join('; ');
-    } catch {
-      /* not JSON */
+function createClient(prefix: string, token: () => string | null, onUnauthorized: () => void) {
+  async function raw(method: string, path: string, body?: unknown): Promise<Response> {
+    const headers: Record<string, string> = {};
+    const tk = token();
+    if (tk) headers.Authorization = `Bearer ${tk}`;
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const res = await fetch(`${prefix}${path}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    if (res.status === 401 && !/\/(login|register|forgot|reset)$/.test(path)) onUnauthorized();
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      let details;
+      try {
+        const j = await res.json();
+        msg = j.error ?? msg;
+        details = j.details;
+        if (details?.length) msg += ': ' + details.map((d: any) => `${d.path} — ${d.message}`).join('; ');
+      } catch {
+        /* not JSON */
+      }
+      throw new ApiError(res.status, msg, details);
     }
-    throw new ApiError(res.status, msg, details);
+    return res;
   }
-  return res;
-}
-
-export const api = {
-  async get<T = any>(path: string, query?: Query): Promise<T> {
-    return (await raw('GET', path + qs(query))).json();
-  },
-  async post<T = any>(path: string, body: unknown = {}): Promise<T> {
-    return (await raw('POST', path, body)).json();
-  },
-  async put<T = any>(path: string, body: unknown = {}): Promise<T> {
-    return (await raw('PUT', path, body)).json();
-  },
-  async patch<T = any>(path: string, body: unknown = {}): Promise<T> {
-    return (await raw('PATCH', path, body)).json();
-  },
-  async del<T = any>(path: string, body?: unknown): Promise<T> {
-    return (await raw('DELETE', path, body)).json();
-  },
-  /** Opens a PDF (fetched with auth) in a new tab. */
-  async openPdf(path: string, query?: Query) {
-    const win = window.open('', '_blank');
-    try {
+  return {
+    async get<T = any>(path: string, query?: Query): Promise<T> {
+      return (await raw('GET', path + qs(query))).json();
+    },
+    async post<T = any>(path: string, body: unknown = {}): Promise<T> {
+      return (await raw('POST', path, body)).json();
+    },
+    async put<T = any>(path: string, body: unknown = {}): Promise<T> {
+      return (await raw('PUT', path, body)).json();
+    },
+    async patch<T = any>(path: string, body: unknown = {}): Promise<T> {
+      return (await raw('PATCH', path, body)).json();
+    },
+    async del<T = any>(path: string, body?: unknown): Promise<T> {
+      return (await raw('DELETE', path, body)).json();
+    },
+    /** Opens a PDF (fetched with auth) in a new tab. */
+    async openPdf(path: string, query?: Query) {
+      const win = window.open('', '_blank');
+      try {
+        const res = await raw('GET', path + qs(query));
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (win) win.location.href = url;
+        else window.location.href = url;
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch (e) {
+        win?.close();
+        throw e;
+      }
+    },
+    async download(path: string, filename: string, query?: Query) {
       const res = await raw('GET', path + qs(query));
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      if (win) win.location.href = url;
-      else window.location.href = url;
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (e) {
-      win?.close();
-      throw e;
-    }
-  },
-  async download(path: string, filename: string, query?: Query) {
-    const res = await raw('GET', path + qs(query));
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  },
-};
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    },
+  };
+}
+
+let onUserUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: () => void) {
+  onUserUnauthorized = fn;
+}
+
+export const api = createClient('/api', getToken, () => {
+  if (isImpersonating()) setImpersonationToken(null);
+  else setToken(null);
+  onUserUnauthorized?.();
+});
+
+let onStaffUnauthorized: (() => void) | null = null;
+export function setStaffUnauthorizedHandler(fn: () => void) {
+  onStaffUnauthorized = fn;
+}
+
+export const adminApi = createClient('/api/admin', getStaffToken, () => {
+  setStaffToken(null);
+  onStaffUnauthorized?.();
+});

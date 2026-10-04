@@ -21,7 +21,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { BRAND } from '../brand';
 import { useIntegrations } from '../data';
-import { fmtDateTime } from '../format';
+import { fmtDate, fmtDateTime } from '../format';
 import { useI18n, useT, type Lang } from '../i18n';
 import { Dropdown, LogoMark } from './ui';
 
@@ -63,7 +63,10 @@ function useNav(): NavGroup[] {
       children: [
         { to: '/products', label: t('Inventory') },
         { to: '/products/new', label: t('Add product') },
-        { to: '/offers', label: t('Marketplace offers') },
+        { to: '/offers', label: t('Manage offers') },
+        { to: '/products/warehouses', label: t('Warehouses') },
+        { to: '/products/catalogs', label: t('Catalogs') },
+        { to: '/products/documents', label: t('Warehouse documents') },
         { to: '/products/categories', label: t('Categories and manufacturers') },
       ],
     },
@@ -76,6 +79,7 @@ function useNav(): NavGroup[] {
       children: [
         { to: '/integrations', label: t('My integrations') },
         { to: '/integrations/add', label: t('Add integration') },
+        { to: '/integrations/accelerations', label: t('Accelerations') },
       ],
     },
     {
@@ -92,9 +96,20 @@ function useNav(): NavGroup[] {
         { to: '/settings/email', label: t('E-mail templates') },
         { to: '/settings/users', label: t('Users') },
         { to: '/settings/account', label: t('My account') },
+        { to: '/settings/subscription', label: t('Subscription') },
       ],
     },
-    { id: 'help', icon: <CircleHelp />, label: t('Help and contact'), to: '/help', match: ['/help'] },
+    {
+      id: 'help',
+      icon: <CircleHelp />,
+      label: t('Help and contact'),
+      to: '/help',
+      match: ['/help'],
+      children: [
+        { to: '/help', label: t('Help center') },
+        { to: '/help/tickets/new', label: t('Contact support') },
+      ],
+    },
   ];
 }
 
@@ -443,10 +458,48 @@ export function Layout() {
             <UserMenu />
           </div>
         </header>
+        <AccountBanners />
         <main className="content">
           <Outlet />
         </main>
       </div>
     </div>
+  );
+}
+
+function AccountBanners() {
+  const t = useT();
+  const { user, logout } = useAuth();
+  if (!user) return null;
+  const a = user.account;
+  const daysLeft = a.trial_ends_at ? Math.ceil((new Date(a.trial_ends_at.replace(' ', 'T') + 'Z').getTime() - Date.now()) / 86400_000) : null;
+  return (
+    <>
+      {user.impersonator && (
+        <div className="row no-print" style={{ background: '#f0803c', color: '#fff', padding: '8px 24px', fontWeight: 600 }}>
+          {t('Support session: {staff} is logged in to the account {account}. Actions are recorded.', { staff: user.impersonator.name, account: a.name })}
+          <div className="grow" />
+          <button className="btn btn-sm" onClick={logout}>
+            {t('End session')}
+          </button>
+        </div>
+      )}
+      {a.status === 'suspended' && (
+        <div className="row no-print" style={{ background: '#d9363e', color: '#fff', padding: '10px 24px' }}>
+          {t('The account is suspended (trial ended or subscription unpaid). Data is read-only.')}
+          <div className="grow" />
+          <Link to="/settings/subscription" className="btn btn-sm">
+            {t('Choose a plan')}
+          </Link>
+        </div>
+      )}
+      {a.status === 'trial' && daysLeft !== null && daysLeft <= 7 && (
+        <div className="row no-print" style={{ background: '#fff5e8', color: '#b55a12', padding: '8px 24px' }}>
+          {t('Trial period ends on {date} ({n} days left).', { date: fmtDate(a.trial_ends_at), n: Math.max(0, daysLeft) })}
+          <div className="grow" />
+          <Link to="/settings/subscription">{t('Choose a plan')}</Link>
+        </div>
+      )}
+    </>
   );
 }

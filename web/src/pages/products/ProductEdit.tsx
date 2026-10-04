@@ -9,6 +9,7 @@ import { useSettings } from '../../data';
 import { fmtDateTime, money } from '../../format';
 import { useT } from '../../i18n';
 import { useCategories, useManufacturers } from './ProductsPage';
+import { useCatalogs, useWarehouses } from './Warehouses';
 
 type Tab = 'general' | 'variants' | 'offers' | 'history';
 
@@ -44,6 +45,8 @@ export default function ProductEdit() {
   const settings = useSettings();
   const cats = useCategories();
   const mans = useManufacturers();
+  const catalogs = useCatalogs();
+  const warehouses = useWarehouses();
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as Tab) ?? 'general';
   const q = useQuery({ queryKey: ['product', id], queryFn: () => api.get<any>(`/products/${id}`), enabled: !isNew });
@@ -64,8 +67,11 @@ export default function ProductEdit() {
         length: String(p.length || ''),
         category_id: p.category_id ? String(p.category_id) : '',
         manufacturer_id: p.manufacturer_id ? String(p.manufacturer_id) : '',
+        catalog_id: p.catalog_id ? String(p.catalog_id) : '',
+        stocks: Object.fromEntries((p.stocks ?? []).map((x: any) => [x.warehouse_id, String(x.stock)])),
       });
-    } else if (isNew && settings.data) setF({ ...EMPTY, tax_rate: String(settings.data.orders?.default_tax_rate ?? 23) });
+    } else if (isNew && settings.data)
+      setF({ ...EMPTY, catalog_id: params.get('catalog_id') ?? '', stocks: {}, tax_rate: String(settings.data.orders?.default_tax_rate ?? 23) });
   }, [q.data, isNew, settings.data]);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF((x: any) => ({ ...x, [k]: e.target.value }));
 
@@ -88,7 +94,11 @@ export default function ProductEdit() {
       manufacturer_id: f.manufacturer_id ? Number(f.manufacturer_id) : null,
       images: f.images,
     };
-    if (!hasVariants) body.stock = Math.trunc(num(f.stock));
+    if (f.catalog_id) body.catalog_id = Number(f.catalog_id);
+    if (!hasVariants) {
+      if ((warehouses.data?.length ?? 0) > 1) body.stocks = Object.fromEntries(Object.entries(f.stocks ?? {}).map(([k, v]) => [k, Math.trunc(num(v))]));
+      else body.stock = Math.trunc(num(f.stock));
+    }
     const r = await run(() => (isNew ? api.post('/products', body) : api.put(`/products/${id}`, body)), t('Saved'));
     if (r) {
       qc.invalidateQueries({ queryKey: ['products'] });
@@ -169,6 +179,16 @@ export default function ProductEdit() {
                   ))}
                 </select>
               </Field>
+              <Field label={t('Catalog')}>
+                <select className="select" value={f.catalog_id ?? ''} onChange={set('catalog_id')}>
+                  {!f.catalog_id && <option value="">{t('Default catalog')}</option>}
+                  {catalogs.data?.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label={t('Manufacturer')}>
                 <select className="select" value={f.manufacturer_id} onChange={set('manufacturer_id')}>
                   <option value="">—</option>
@@ -242,9 +262,29 @@ export default function ProductEdit() {
                 <Field label={t('Margin')}>
                   <input className="input" readOnly value={margin === null ? '—' : `${margin.toFixed(1)}%`} />
                 </Field>
-                <Field label={t('Stock')} help={hasVariants ? t('Stock is managed on variants') : undefined}>
-                  <input className="input" value={hasVariants ? q.data.variants.reduce((s: number, v: any) => s + v.stock, 0) : f.stock} onChange={set('stock')} inputMode="numeric" disabled={hasVariants} />
-                </Field>
+                {(warehouses.data?.length ?? 0) > 1 && !hasVariants ? (
+                  <div className="full">
+                    <div className="field-label mb" style={{ marginBottom: 6 }}>
+                      {t('Stock in warehouses')}
+                    </div>
+                    {warehouses.data?.map((w) => (
+                      <div key={w.id} className="row mb" style={{ marginBottom: 6 }}>
+                        <span className="grow">{w.name}</span>
+                        <input
+                          className="input input-sm"
+                          style={{ width: 100, textAlign: 'right' }}
+                          value={f.stocks?.[w.id] ?? '0'}
+                          onChange={(e) => setF((x: any) => ({ ...x, stocks: { ...x.stocks, [w.id]: e.target.value } }))}
+                          inputMode="numeric"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Field label={t('Stock')} help={hasVariants ? t('Stock is managed on variants') : undefined}>
+                    <input className="input" value={hasVariants ? q.data.variants.reduce((s: number, v: any) => s + v.stock, 0) : f.stock} onChange={set('stock')} inputMode="numeric" disabled={hasVariants} />
+                  </Field>
+                )}
                 <Field label={t('Location')}>
                   <input className="input" value={f.location} onChange={set('location')} placeholder="A-01-1" />
                 </Field>
@@ -492,6 +532,7 @@ function HistoryTab({ product }: { product: any }) {
               <tr>
                 <th>{t('Date')}</th>
                 <th>{t('Reason')}</th>
+                <th>{t('Warehouse')}</th>
                 <th className="num">{t('Change')}</th>
                 <th className="num">{t('Stock after')}</th>
               </tr>
@@ -509,6 +550,7 @@ function HistoryTab({ product }: { product: any }) {
                       </>
                     )}
                   </td>
+                  <td>{h.warehouse_name ?? '—'}</td>
                   <td className="num" style={{ color: h.change > 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
                     {h.change > 0 ? `+${h.change}` : h.change}
                   </td>
