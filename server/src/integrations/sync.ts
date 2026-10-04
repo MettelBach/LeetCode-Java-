@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { sendLifecycleMails } from '../services/lifecycle-mail.js';
 import { config } from '../config.js';
 import { db, parseJson, runWithTenant } from '../db/index.js';
 import { notFound } from '../lib/http.js';
@@ -359,4 +360,8 @@ export function startScheduler() {
     tick().catch((e) => console.error('[scheduler] failed', e));
   });
   cron.schedule('5 0 * * *', () => dailyJobs());
+  // Onboarding e-mails go out in the morning, Polish time.
+  cron.schedule('0 9 * * *', () => {
+    sendLifecycleMails().catch((e) => console.error('[lifecycle] failed', e));
+  }, { timezone: 'Europe/Warsaw' });
 }

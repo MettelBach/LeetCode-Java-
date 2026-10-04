@@ -171,7 +171,7 @@ authRouter.post('/register', async (req, res) => {
   if (b.demo) await runWithTenant(accountId, () => seedDemo());
   refreshAccountStats(accountId);
   const u = platformDb.prepare('SELECT id, account_id, token_version FROM users WHERE id = ?').get(userId) as any;
-  platformMail(b.email, 'Witamy w SellHub', `Twoje konto ${b.company} zostało utworzone. Okres próbny: ${config.trialDays} dni.\n${config.appUrl}`).catch(() => undefined);
+  platformMail(b.email, `Witamy w ${config.brandName}`, `Twoje konto ${b.company} zostało utworzone. Okres próbny: ${config.trialDays} dni.\n${config.appUrl}`).catch(() => undefined);
   res.json({ token: signUser(u) });
 });
 

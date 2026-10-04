@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const config = {
+  /** Product name used in e-mails (the web app reads web/src/brand.ts). */
+  brandName: process.env.BRAND_NAME ?? 'SellHub',
   port: Number(process.env.PORT ?? 3001),
   /** Public URL of the app — used in links (order page, OAuth redirect). */
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',

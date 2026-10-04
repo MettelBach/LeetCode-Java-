@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mapCheckoutForm } from './integrations/allegro.js';
 import { empikBaseUrl, iso2, mapMiraklOrder } from './integrations/empik.js';
 import { isPrivateIp } from './lib/net.js';
+import { dueMessage } from './services/lifecycle-mail.js';
 import { kauflandSignature, mapOrderUnits } from './integrations/kaufland.js';
 import { testCondition } from './services/automation.js';
 import { computeTotals, formatNumber } from './services/invoices.js';
@@ -118,5 +119,25 @@ describe('outbound address checks', () => {
   it('detects private addresses', () => {
     for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1', '100.64.0.1']) expect(isPrivateIp(ip)).toBe(true);
     for (const ip of ['8.8.8.8', '151.101.1.1', '2a00:1450:4001::1']) expect(isPrivateIp(ip)).toBe(false);
+  });
+});
+
+describe('lifecycle e-mails', () => {
+  const now = new Date('2026-10-10T09:00:00Z');
+  const acc = (o: Partial<Parameters<typeof dueMessage>[0]>) =>
+    ({ id: 1, status: 'trial', language: 'pl', settings: '{}', trial_ends_at: '2026-10-20 10:00:00', paid_until: null, created_at: '2026-10-06 10:00:00', email: 'a@a.pl', name: 'A', ...o }) as Parameters<typeof dueMessage>[0];
+  it('asks to connect a marketplace only when none is connected', () => {
+    expect(dueMessage(acc({ created_at: '2026-10-08 10:00:00' }), now, false, [])).toBe('connect');
+    expect(dueMessage(acc({ created_at: '2026-10-08 10:00:00' }), now, true, [])).toBeNull();
+  });
+  it('sends each message once and in order', () => {
+    expect(dueMessage(acc({}), now, false, [])).toBe('connect');
+    expect(dueMessage(acc({}), now, false, ['connect'])).toBe('automation');
+    expect(dueMessage(acc({}), now, false, ['connect', 'automation'])).toBeNull();
+  });
+  it('reminds before and after the end of the trial', () => {
+    expect(dueMessage(acc({ trial_ends_at: '2026-10-12 10:00:00' }), now, true, ['automation'])).toBe('trial_ending');
+    expect(dueMessage(acc({ status: 'suspended', trial_ends_at: '2026-10-08 10:00:00' }), now, true, [])).toBe('trial_ended');
+    expect(dueMessage(acc({ status: 'suspended', trial_ends_at: '2026-10-08 10:00:00', paid_until: '2026-10-01 00:00:00' }), now, true, [])).toBeNull();
   });
 });
