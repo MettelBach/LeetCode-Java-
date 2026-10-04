@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, useParams } from 'react-router-dom';
-import { api } from '../../api';
+import { api, setToken } from '../../api';
 import { useAuth } from '../../auth';
 import { Empty, Field, Loading, Modal, Switch, useAction, useConfirm } from '../../components/ui';
 import { useEmailTemplates, useInvoiceSeries, useSettings, useStatuses, type Status } from '../../data';
@@ -582,7 +582,13 @@ function EmailTab() {
                 <input className="input" value={smtp.host} onChange={(e) => setSmtp({ ...smtp, host: e.target.value })} placeholder="smtp.example.com" />
               </Field>
               <Field label={t('Port')}>
-                <input className="input" value={smtp.port} onChange={(e) => setSmtp({ ...smtp, port: Number(e.target.value) || 587 })} inputMode="numeric" />
+                <select className="input" value={smtp.port} onChange={(e) => setSmtp({ ...smtp, port: Number(e.target.value) })}>
+                  {[587, 465, 25, 2525].map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
               </Field>
               <Field label={t('User')}>
                 <input className="input" value={smtp.user} onChange={(e) => setSmtp({ ...smtp, user: e.target.value })} autoComplete="off" />
@@ -811,7 +817,10 @@ function AccountTab() {
           <input className="input" type="password" value={pwd.new_password} onChange={(e) => setPwd({ ...pwd, new_password: e.target.value })} autoComplete="new-password" />
         </Field>
         <div className="row wrap">
-          <button className="btn btn-primary" disabled={pwd.new_password.length < 8} onClick={() => run(() => api.put('/auth/me', pwd), t('Password changed')).then(() => setPwd({ current_password: '', new_password: '' }))}>
+          <button className="btn btn-primary" disabled={pwd.new_password.length < 8} onClick={() => run(() => api.put<{ token?: string }>('/auth/me', pwd), t('Password changed')).then((r) => {
+                if (r?.token) setToken(r.token);
+                setPwd({ current_password: '', new_password: '' });
+              })}>
             {t('Change password')}
           </button>
           <button

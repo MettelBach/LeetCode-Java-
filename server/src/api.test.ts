@@ -228,4 +228,24 @@ describe('SaaS flow', () => {
     expect(ok.data.seller_comment).toBeUndefined();
     expect((await call('GET', `/public/order/${me.data.account.id}/${orderId}/${'0'.repeat(24)}`)).status).toBe(404);
   });
+
+  it('keeps marketplace credentials on marketplace hosts and SMTP on allowed ports', async () => {
+    const bad = await call('POST', '/integrations', { type: 'empik', name: 'Empik', credentials: { api_key: 'k', base_url: 'http://169.254.169.254' } }, tokenA);
+    expect(bad.status).toBe(400);
+    const evil = await call('POST', '/integrations', { type: 'empik', name: 'Empik', credentials: { api_key: 'k', base_url: 'https://empik.com.evil.io' } }, tokenA);
+    expect(evil.status).toBe(400);
+    const ok = await call('POST', '/integrations', { type: 'empik', name: 'Empik', credentials: { api_key: 'k', base_url: 'https://marketplace.empik.com' } }, tokenA);
+    expect(ok.status).toBe(200);
+    expect((await call('PUT', `/integrations/${ok.data.id}`, { credentials: { base_url: 'https://127.0.0.1' } }, tokenA)).status).toBe(400);
+    expect((await call('PUT', '/settings/smtp', { host: 'localhost', port: 6379 }, tokenA)).status).toBe(400);
+    expect((await call('PUT', '/settings/smtp', { host: 'smtp.example.com', port: 587 }, tokenA)).status).toBe(200);
+  });
+
+  it('changing the password signs out other sessions', async () => {
+    const r = await call('PUT', '/auth/me', { current_password: 'password1', new_password: 'password1-new' }, tokenA);
+    expect(r.status).toBe(200);
+    expect(r.data.token).toBeTruthy();
+    expect((await call('GET', '/auth/me', undefined, tokenA)).status).toBe(401);
+    expect((await call('GET', '/auth/me', undefined, r.data.token)).status).toBe(200);
+  });
 });

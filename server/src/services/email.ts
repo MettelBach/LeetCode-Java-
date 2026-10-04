@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { assertPublicHost, SMTP_PORTS } from '../lib/net.js';
 import { config } from '../config.js';
 import { currentAccountId, db, getSetting } from '../db/index.js';
 import { notFound } from '../lib/http.js';
@@ -57,6 +58,9 @@ export async function sendEmail(orderId: number | null, to: string, subject: str
   else if (!smtp.host) status = 'not sent: SMTP not configured';
   else {
     try {
+      // The SMTP server is configured by the client: never connect to internal hosts.
+      if (!SMTP_PORTS.includes(Number(smtp.port))) throw new Error(`SMTP port ${smtp.port} is not allowed`);
+      await assertPublicHost(smtp.host);
       const transport = nodemailer.createTransport({
         host: smtp.host,
         port: smtp.port,

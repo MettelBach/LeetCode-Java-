@@ -1,3 +1,4 @@
+import { SMTP_PORTS } from '../lib/net.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { db, getSetting, parseJson, platformDb, runWithTenant, setSetting } from '../db/index.js';
@@ -200,7 +201,7 @@ const SETTINGS_SCHEMAS = {
   }),
   smtp: z.object({
     host: z.string().max(200),
-    port: z.number().int().min(1).max(65535),
+    port: z.number().int().refine((p) => SMTP_PORTS.includes(p), 'SMTP port must be 25, 465, 587 or 2525'),
     secure: z.boolean(),
     user: z.string().max(200),
     password: z.string().max(200),

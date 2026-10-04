@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mapCheckoutForm } from './integrations/allegro.js';
-import { iso2, mapMiraklOrder } from './integrations/empik.js';
+import { empikBaseUrl, iso2, mapMiraklOrder } from './integrations/empik.js';
+import { isPrivateIp } from './lib/net.js';
 import { kauflandSignature, mapOrderUnits } from './integrations/kaufland.js';
 import { testCondition } from './services/automation.js';
 import { computeTotals, formatNumber } from './services/invoices.js';
@@ -102,5 +103,20 @@ describe('barcode', () => {
     const p = code128B('613855548871');
     for (const x of p.slice(0, -1)) expect([...x].reduce((s, d) => s + Number(d), 0)).toBe(11);
     expect(p[p.length - 1]).toBe('2331112');
+  });
+});
+
+describe('outbound address checks', () => {
+  it('allows only Empik/Mirakl HTTPS hosts for the Empik API', () => {
+    expect(empikBaseUrl('')).toBe('https://marketplace.empik.com');
+    expect(empikBaseUrl('https://empik-preprod.mirakl.net/')).toBe('https://empik-preprod.mirakl.net');
+    for (const bad of ['http://marketplace.empik.com', 'https://localhost', 'https://empik.com.evil.io', 'https://x@marketplace.empik.com', 'https://marketplace.empik.com:8443', 'file:///etc/passwd']) {
+      expect(() => empikBaseUrl(bad)).toThrow();
+    }
+  });
+
+  it('detects private addresses', () => {
+    for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1', '100.64.0.1']) expect(isPrivateIp(ip)).toBe(true);
+    for (const ip of ['8.8.8.8', '151.101.1.1', '2a00:1450:4001::1']) expect(isPrivateIp(ip)).toBe(false);
   });
 });

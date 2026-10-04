@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db, parseJson } from '../db/index.js';
 import { HttpError, idParam, q } from '../lib/http.js';
 import { pollDeviceToken, startDeviceAuth } from '../integrations/allegro.js';
-import { EMPIK_DEFAULT_URL } from '../integrations/empik.js';
+import { EMPIK_DEFAULT_URL, empikBaseUrl } from '../integrations/empik.js';
 import {
   connectorFor,
   DEFAULT_SETTINGS,
@@ -69,6 +69,16 @@ integrationsRouter.get('/:id', (req, res) => {
 });
 
 const credSchema = z.record(z.string(), z.union([z.string().max(2000), z.boolean()]));
+
+/** Rejects API addresses outside the marketplace's own domains. */
+function checkCredentials(creds?: Record<string, any>) {
+  if (typeof creds?.base_url !== 'string') return;
+  try {
+    empikBaseUrl(creds.base_url);
+  } catch (e: any) {
+    throw new HttpError(400, e.message);
+  }
+}
 const settingsSchema = z
   .object({
     import_status_id: z.number().int().nullable(),
@@ -99,6 +109,7 @@ integrationsRouter.post('/', requireAdmin, (req, res) => {
       settings: settingsSchema.optional(),
     })
     .parse(req.body);
+  checkCredentials(b.credentials);
   const r = db
     .prepare('INSERT INTO integrations (type, name, demo, credentials, settings) VALUES (?, ?, ?, ?, ?)')
     .run(b.type, b.name, b.demo ? 1 : 0, JSON.stringify(b.credentials ?? {}), JSON.stringify({ ...DEFAULT_SETTINGS[b.type], ...(b.settings ?? {}) }));
@@ -126,6 +137,7 @@ integrationsRouter.put('/:id', requireAdmin, (req, res) => {
       creds[k] = v;
     }
   }
+  checkCredentials(creds);
   const settings = { ...parseJson(row.settings, {}), ...(b.settings ?? {}) };
   db.prepare('UPDATE integrations SET name = ?, enabled = ?, demo = ?, credentials = ?, settings = ? WHERE id = ?').run(
     b.name ?? row.name,

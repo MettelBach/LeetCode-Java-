@@ -40,3 +40,14 @@ export async function assertPublicHttpsUrl(raw: string): Promise<URL> {
   if (!addrs.length || addrs.some(isPrivateIp)) throw new Error('the address points to a private network');
   return url;
 }
+
+/** Resolves a host name and rejects private/internal addresses (tenant SMTP servers). */
+export async function assertPublicHost(host: string): Promise<void> {
+  const h = host.trim().replace(/^\[|\]$/g, '');
+  if (!h) throw new Error('host is empty');
+  const addrs = net.isIP(h) ? [h] : (await dns.lookup(h, { all: true })).map((a) => a.address);
+  if (!addrs.length || addrs.some(isPrivateIp)) throw new Error('the address points to a private network');
+}
+
+/** Ports a tenant-defined SMTP server may use. */
+export const SMTP_PORTS = [25, 465, 587, 2525];

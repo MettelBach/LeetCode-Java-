@@ -249,11 +249,15 @@ authRouter.put('/me', requireAuth, (req, res) => {
     if (req.impersonator) throw new HttpError(403, 'Support cannot change the client password');
     const row = platformDb.prepare('SELECT password_hash FROM users WHERE id = ?').get(u.id) as { password_hash: string };
     if (!body.current_password || !bcrypt.compareSync(body.current_password, row.password_hash)) throw new HttpError(400, 'Current password is incorrect');
-    platformDb.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(body.new_password, 10), u.id);
+    // Changing the password signs out all other sessions; the caller gets a fresh token.
+    platformDb.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(bcrypt.hashSync(body.new_password, 10), u.id);
   }
   if (body.name) platformDb.prepare('UPDATE users SET name = ? WHERE id = ?').run(body.name, u.id);
   if (body.language) platformDb.prepare('UPDATE users SET language = ? WHERE id = ?').run(body.language, u.id);
-  res.json(platformDb.prepare('SELECT id, account_id, email, name, role, language FROM users WHERE id = ?').get(u.id));
+  const out = platformDb.prepare('SELECT id, account_id, email, name, role, language, token_version FROM users WHERE id = ?').get(u.id) as any;
+  const token = body.new_password ? signUser(out) : undefined;
+  delete out.token_version;
+  res.json({ ...out, ...(token ? { token } : {}) });
 });
 
 /** Logs out on all devices. */

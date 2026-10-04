@@ -26,6 +26,8 @@ export async function request<T = any>(url: string, opts: RequestOptions = {}): 
         method: opts.method ?? 'GET',
         headers: opts.headers,
         body: opts.body,
+        // Marketplace APIs do not redirect; following redirects could leak credentials.
+        redirect: 'error',
         signal: AbortSignal.timeout(opts.timeoutMs ?? 30000),
       });
       const text = await res.text();

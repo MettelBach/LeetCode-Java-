@@ -9,6 +9,27 @@ import type { Connector, ConnectorContext, ListingInput, ListingOptions, Marketp
 
 export const EMPIK_DEFAULT_URL = 'https://marketplace.empik.com';
 
+/**
+ * The API address may be changed (e.g. Empik test environment), but only to
+ * Empik / Mirakl hosts over HTTPS — the API key must never leave for other servers.
+ */
+export function empikBaseUrl(raw?: string): string {
+  const value = String(raw || '').trim();
+  if (!value) return EMPIK_DEFAULT_URL;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('Invalid Empik API address');
+  }
+  const host = url.hostname.toLowerCase();
+  const allowed = host === 'empik.com' || host.endsWith('.empik.com') || host.endsWith('.mirakl.net');
+  if (url.protocol !== 'https:' || !allowed || url.username || url.password || url.port) {
+    throw new Error('Empik API address must be https://*.empik.com or https://*.mirakl.net');
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
 /** Mirakl states in which the shipping address is available and the order should be fulfilled. */
 const IMPORTABLE = new Set(['SHIPPING', 'SHIPPED', 'TO_COLLECT', 'RECEIVED', 'CLOSED']);
 
@@ -93,8 +114,7 @@ export class EmpikConnector implements Connector {
   constructor(private ctx: ConnectorContext) {}
 
   private get base() {
-    const url = String(this.ctx.integration.credentials.base_url || EMPIK_DEFAULT_URL).replace(/\/+$/, '');
-    return url;
+    return empikBaseUrl(this.ctx.integration.credentials.base_url);
   }
 
   private api<T = any>(method: string, path: string, body?: unknown) {
