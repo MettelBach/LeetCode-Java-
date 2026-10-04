@@ -324,4 +324,31 @@ describe('SaaS flow', () => {
     await call('DELETE', `/api-tokens/${list.data.tokens[0].id}`, undefined, t);
     expect((await v1('GET', '/statuses')).status).toBe(401);
   });
+
+  it('two-factor authentication for client users, reset by support', async () => {
+    const { totpCode, currentStep } = await import('./lib/totp.js');
+    const login = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
+    const t = login.data.token;
+    const setup = await call('POST', '/auth/2fa/setup', {}, t);
+    expect(setup.data.otpauth).toContain('otpauth://totp/');
+    expect((await call('POST', '/auth/2fa/enable', { code: '000000' }, t)).status).toBe(400);
+    const step = currentStep();
+    expect((await call('POST', '/auth/2fa/enable', { code: totpCode(setup.data.secret, step) }, t)).status).toBe(200);
+    expect((await call('GET', '/auth/2fa', undefined, t)).data.enabled).toBe(true);
+
+    const noCode = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
+    expect(noCode.data).toEqual({ two_factor_required: true });
+    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3', code: '123456' })).status).toBe(401);
+    // The code used to enable 2FA cannot be used again.
+    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3', code: totpCode(setup.data.secret, step) })).status).toBe(401);
+    const ok = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3', code: totpCode(setup.data.secret, step + 1) });
+    expect(ok.data.token).toBeTruthy();
+
+    const admin = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
+    const acc = (await call('GET', '/admin/accounts?search=Sklep Ads', undefined, admin.data.token)).data.rows[0];
+    const detail = await call('GET', `/admin/accounts/${acc.id}`, undefined, admin.data.token);
+    expect(detail.data.users[0].totp_enabled).toBe(1);
+    await call('POST', `/admin/accounts/${acc.id}/users/${detail.data.users[0].id}/reset-2fa`, {}, admin.data.token);
+    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' })).data.token).toBeTruthy();
+  });
 });

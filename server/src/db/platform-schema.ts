@@ -115,4 +115,10 @@ export const platformMigrations: string[] = [
     last_used_at TEXT
   );
   CREATE INDEX idx_api_tokens_account ON api_tokens(account_id);`,
+  `ALTER TABLE users ADD COLUMN totp_secret TEXT;
+   ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE staff ADD COLUMN totp_secret TEXT;
+   ALTER TABLE staff ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE staff ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;`,
 ];

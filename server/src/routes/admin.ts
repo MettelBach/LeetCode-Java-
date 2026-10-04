@@ -15,13 +15,14 @@ import {
 } from '../services/platform.js';
 import { checkRate, clearRate, failRate, passwordSchema, requireStaff, requireSuperadmin, signStaff, signUser } from './auth.js';
 import { staffReply } from './support.js';
+import { checkSecondFactor, resetSecondFactor, twoFactorRouter } from './two-factor.js';
 
 export const adminRouter = Router();
 
 /* ------------------------------------ auth ------------------------------------ */
 
 adminRouter.post('/login', (req, res) => {
-  const b = z.object({ email: z.string().max(200), password: z.string().max(200) }).parse(req.body);
+  const b = z.object({ email: z.string().max(200), password: z.string().max(200), code: z.string().max(10).optional() }).parse(req.body);
   const email = b.email.trim().toLowerCase();
   const key = `staff|${req.ip}|${email}`;
   checkRate(key, 5);
@@ -29,6 +30,13 @@ adminRouter.post('/login', (req, res) => {
   if (!s || !s.active || !bcrypt.compareSync(b.password, s.password_hash)) {
     failRate(key);
     throw new HttpError(401, 'Invalid e-mail or password');
+  }
+  if (s.totp_enabled) {
+    if (!b.code) return void res.json({ two_factor_required: true });
+    if (!checkSecondFactor('staff', s.id, b.code)) {
+      failRate(key);
+      throw new HttpError(401, 'Invalid two-factor code');
+    }
   }
   clearRate(key);
   platformDb.prepare('UPDATE staff SET last_login_at = ? WHERE id = ?').run(nowSql(), s.id);
@@ -41,6 +49,8 @@ adminRouter.use(requireStaff);
 adminRouter.get('/me', (req, res) => {
   res.json(req.staff);
 });
+
+adminRouter.use('/me/2fa', twoFactorRouter('staff', (req) => req.staff?.id));
 
 adminRouter.put('/me/password', (req, res) => {
   const b = z.object({ current_password: z.string(), new_password: passwordSchema }).parse(req.body);
@@ -175,7 +185,7 @@ adminRouter.get('/conversions.csv', (req, res) => {
 adminRouter.get('/accounts/:id', (req, res) => {
   const a = getAccount(idParam(req));
   const stats = refreshAccountStats(a.id);
-  const users = platformDb.prepare('SELECT id, email, name, role, active, last_login_at, created_at FROM users WHERE account_id = ?').all(a.id);
+  const users = platformDb.prepare('SELECT id, email, name, role, active, totp_enabled, last_login_at, created_at FROM users WHERE account_id = ?').all(a.id);
   const tickets = platformDb.prepare('SELECT id, subject, status, priority, last_message_at FROM tickets WHERE account_id = ? ORDER BY id DESC LIMIT 50').all(a.id);
   const billing = platformDb.prepare('SELECT * FROM billing WHERE account_id = ? ORDER BY date DESC, id DESC LIMIT 100').all(a.id);
   const auditRows = platformDb
@@ -266,6 +276,17 @@ adminRouter.post('/accounts/:id/users/:userId/logout', (req, res) => {
   const a = getAccount(idParam(req));
   platformDb.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ? AND account_id = ?').run(idParam(req, 'userId'), a.id);
   audit(req.staff!.id, a.id, 'user.logout', String(idParam(req, 'userId')), req.ip ?? '');
+  res.json({ ok: true });
+});
+
+/** Turns off 2FA of a client user who lost the phone (identity must be verified by support). */
+adminRouter.post('/accounts/:id/users/:userId/reset-2fa', (req, res) => {
+  const a = getAccount(idParam(req));
+  const userId = idParam(req, 'userId');
+  if (!platformDb.prepare('SELECT 1 FROM users WHERE id = ? AND account_id = ?').get(userId, a.id)) throw new HttpError(404, 'Not found');
+  resetSecondFactor('users', userId);
+  platformDb.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(userId);
+  audit(req.staff!.id, a.id, 'user.reset_2fa', String(userId), req.ip ?? '');
   res.json({ ok: true });
 });
 
@@ -368,7 +389,7 @@ adminRouter.get('/staff', (_req, res) => {
   res.json(
     platformDb
       .prepare(
-        `SELECT s.id, s.email, s.name, s.role, s.active, s.last_login_at, s.created_at,
+        `SELECT s.id, s.email, s.name, s.role, s.active, s.totp_enabled, s.last_login_at, s.created_at,
           (SELECT COUNT(*) FROM tickets t WHERE t.assigned_staff_id = s.id AND t.status IN ('new','open','waiting')) open_tickets
          FROM staff s ORDER BY s.id`,
       )
@@ -388,13 +409,16 @@ adminRouter.post('/staff', requireSuperadmin, (req, res) => {
 
 adminRouter.put('/staff/:id', requireSuperadmin, (req, res) => {
   const id = idParam(req);
-  const b = z.object({ role: z.enum(['superadmin', 'support']).optional(), active: z.boolean().optional(), password: passwordSchema.optional() }).parse(req.body);
+  const b = z
+    .object({ role: z.enum(['superadmin', 'support']).optional(), active: z.boolean().optional(), password: passwordSchema.optional(), reset_2fa: z.literal(true).optional() })
+    .parse(req.body);
   if (id === req.staff!.id && (b.active === false || b.role === 'support')) throw new HttpError(400, 'You cannot demote or deactivate yourself');
   const s = platformDb.prepare('SELECT * FROM staff WHERE id = ?').get(id) as any;
   if (!s) throw new HttpError(404, 'Not found');
   platformDb
     .prepare('UPDATE staff SET role = ?, active = ?, password_hash = ?, token_version = token_version + ? WHERE id = ?')
-    .run(b.role ?? s.role, b.active === undefined ? s.active : b.active ? 1 : 0, b.password ? bcrypt.hashSync(b.password, 10) : s.password_hash, b.active === false || b.password ? 1 : 0, id);
+    .run(b.role ?? s.role, b.active === undefined ? s.active : b.active ? 1 : 0, b.password ? bcrypt.hashSync(b.password, 10) : s.password_hash, b.active === false || b.password || b.reset_2fa ? 1 : 0, id);
+  if (b.reset_2fa) resetSecondFactor('staff', id);
   audit(req.staff!.id, null, 'staff.update', `${s.email} ${JSON.stringify({ ...b, password: b.password ? '***' : undefined })}`, req.ip ?? '');
   res.json({ ok: true });
 });

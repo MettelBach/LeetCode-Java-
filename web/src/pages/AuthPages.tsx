@@ -37,12 +37,33 @@ function AuthShell({ children, title }: { children: ReactNode; title: string }) 
   );
 }
 
+/** Second login step: 6-digit code from the authenticator app. */
+export function TwoFactorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const t = useT();
+  return (
+    <Field label={t('Code from the authenticator app')} help={t('Two-factor authentication is enabled for this account.')}>
+      <input
+        className="input"
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        pattern="\d{6}"
+        required
+        autoFocus
+        style={{ letterSpacing: '0.3em', fontSize: 18 }}
+      />
+    </Field>
+  );
+}
+
 export function LoginPage() {
   const t = useT();
   const { login } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const cfg = useQuery({ queryKey: ['auth-config'], queryFn: () => api.get<any>('/auth/config') });
@@ -51,7 +72,11 @@ export function LoginPage() {
     setBusy(true);
     setError('');
     try {
-      const r = await api.post('/auth/login', { email, password });
+      const r = await api.post('/auth/login', { email, password, ...(code !== null ? { code } : {}) });
+      if (r.two_factor_required) {
+        setCode('');
+        return;
+      }
       await login(r.token);
       nav('/');
     } catch (err: any) {
@@ -69,6 +94,7 @@ export function LoginPage() {
         <Field label={t('Password')}>
           <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         </Field>
+        {code !== null && <TwoFactorField value={code} onChange={setCode} />}
         {error && <p className="error-text">{error}</p>}
         <button className="btn btn-primary" style={{ width: '100%', height: 44 }} disabled={busy}>
           {t('Log in')}

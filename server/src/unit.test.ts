@@ -4,6 +4,7 @@ import { empikBaseUrl, iso2, mapMiraklOrder } from './integrations/empik.js';
 import { isPrivateIp } from './lib/net.js';
 import { dueMessage } from './services/lifecycle-mail.js';
 import { openJson, sealJson } from './lib/secrets.js';
+import { base32Decode, base32Encode, totpCode, verifyTotp } from './lib/totp.js';
 import { backupAll } from './services/backup.js';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
@@ -180,5 +181,23 @@ describe('backups', () => {
     copy.close();
     expect(fs.existsSync(path.join(out, '2026-01-01_0330'))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('TOTP', () => {
+  const secret = base32Encode(Buffer.from('12345678901234567890'));
+  it('matches RFC 6238 test vectors', () => {
+    expect(secret).toBe('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    expect(base32Decode(secret).toString()).toBe('12345678901234567890');
+    expect(totpCode(secret, Math.floor(59 / 30))).toBe('287082');
+    expect(totpCode(secret, Math.floor(1111111109 / 30))).toBe('081804');
+  });
+  it('accepts ±1 step and rejects reuse', () => {
+    const now = 1111111109_000;
+    const step = Math.floor(now / 30_000);
+    expect(verifyTotp(secret, totpCode(secret, step - 1), 0, now)).toBe(step - 1);
+    expect(verifyTotp(secret, totpCode(secret, step - 2), 0, now)).toBeNull();
+    expect(verifyTotp(secret, totpCode(secret, step), step, now)).toBeNull();
+    expect(verifyTotp(secret, 'abc', 0, now)).toBeNull();
   });
 });

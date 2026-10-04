@@ -9,6 +9,8 @@ import { Empty, Field, Loading, LogoMark, Modal, Pager, Tabs, useAction, useConf
 import { fmtDate, fmtDateTime, money } from '../../format';
 import { useT } from '../../i18n';
 import { TICKET_CATEGORIES } from '../help/HelpPages';
+import TwoFactorCard from '../../components/TwoFactorCard';
+import { TwoFactorField } from '../AuthPages';
 
 const ACCOUNT_STATUS: Record<string, string> = { trial: 'blue', active: 'green', suspended: 'orange', closed: 'red' };
 const TICKET_ST: Record<string, string> = { new: 'blue', open: 'orange', waiting: 'green', resolved: '', closed: '' };
@@ -24,11 +26,14 @@ export function AdminLogin() {
   const qc = useQueryClient();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState('');
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setError('');
     try {
-      const r = await adminApi.post('/login', { email, password });
+      const r = await adminApi.post('/login', { email, password, ...(code !== null ? { code } : {}) });
+      if (r.two_factor_required) return setCode('');
       setStaffToken(r.token);
       await qc.invalidateQueries({ queryKey: ['staff-me'] });
       nav('/admin');
@@ -49,6 +54,7 @@ export function AdminLogin() {
         <Field label={t('Password')}>
           <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         </Field>
+        {code !== null && <TwoFactorField value={code} onChange={setCode} />}
         {error && <p className="error-text">{error}</p>}
         <button className="btn btn-primary" style={{ width: '100%', height: 44 }}>
           {t('Log in')}
@@ -506,6 +512,7 @@ export function AdminAccount() {
                 <th>{t('Name')}</th>
                 <th>E-mail</th>
                 <th>{t('Role')}</th>
+                <th>2FA</th>
                 <th>{t('Last login')}</th>
                 <th />
               </tr>
@@ -516,8 +523,21 @@ export function AdminAccount() {
                   <td>{u.name}</td>
                   <td>{u.email}</td>
                   <td>{u.role}</td>
+                  <td>{u.totp_enabled ? <span className="badge-soft green">{t('enabled')}</span> : '—'}</td>
                   <td>{fmtDateTime(u.last_login_at)}</td>
                   <td className="num">
+                    {!!u.totp_enabled && (
+                      <button
+                        className="btn btn-xs"
+                        style={{ marginRight: 6 }}
+                        onClick={async () => {
+                          if (await confirm(t('Turn off two-factor authentication for {name}? Do it only after verifying the identity of the client.', { name: u.email }), { danger: true }))
+                            run(() => adminApi.post(`/accounts/${a.id}/users/${u.id}/reset-2fa`), t('Two-factor authentication disabled')).then(refresh);
+                        }}
+                      >
+                        {t('Reset 2FA')}
+                      </button>
+                    )}
                     <button className="btn btn-xs" onClick={() => run(() => adminApi.post(`/accounts/${a.id}/users/${u.id}/logout`), t('Sessions ended'))}>
                       {t('End sessions')}
                     </button>
@@ -982,6 +1002,7 @@ export function AdminStaff() {
                 <th>E-mail</th>
                 <th>{t('Role')}</th>
                 <th className="num">{t('Open tickets')}</th>
+                <th>2FA</th>
                 <th>{t('Last login')}</th>
                 <th />
               </tr>
@@ -993,8 +1014,14 @@ export function AdminStaff() {
                   <td>{s.email}</td>
                   <td>{s.role}</td>
                   <td className="num">{s.open_tickets}</td>
+                  <td>{s.totp_enabled ? <span className="badge-soft green">{t('enabled')}</span> : '—'}</td>
                   <td>{fmtDateTime(s.last_login_at)}</td>
                   <td className="num">
+                    {isSuper && s.id !== me.data?.id && !!s.totp_enabled && (
+                      <button className="btn btn-xs" style={{ marginRight: 6 }} onClick={() => run(() => adminApi.put(`/staff/${s.id}`, { reset_2fa: true }), t('Two-factor authentication disabled')).then(refresh)}>
+                        {t('Reset 2FA')}
+                      </button>
+                    )}
                     {isSuper && s.id !== me.data?.id && (
                       <button className="btn btn-xs" onClick={() => run(() => adminApi.put(`/staff/${s.id}`, { active: !s.active })).then(refresh)}>
                         {s.active ? t('Deactivate') : t('Activate')}
@@ -1017,6 +1044,7 @@ export function AdminStaff() {
           <button className="btn btn-primary" onClick={() => run(() => adminApi.put('/me/password', pwd), t('Password changed')).then(() => setPwd({ current_password: '', new_password: '' }))}>
             {t('Save')}
           </button>
+          <TwoFactorCard client={adminApi} base="/me/2fa" />
         </div>
       </div>
       {adding && (

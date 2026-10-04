@@ -5,6 +5,7 @@ import { NavLink, useParams } from 'react-router-dom';
 import { api, setToken } from '../../api';
 import { useAuth } from '../../auth';
 import ApiTab from './ApiTab';
+import TwoFactorCard from '../../components/TwoFactorCard';
 import { Empty, Field, Loading, Modal, Switch, useAction, useConfirm } from '../../components/ui';
 import { useEmailTemplates, useInvoiceSeries, useSettings, useStatuses, type Status } from '../../data';
 import { COUNTRIES, fmtDate, fmtDateTime, money } from '../../format';
@@ -783,6 +784,7 @@ function AccountTab() {
   const [name, setName] = useState(user?.name ?? '');
   const [pwd, setPwd] = useState({ current_password: '', new_password: '' });
   return (
+    <>
     <div className="grid grid-2" style={{ maxWidth: 960 }}>
       <div className="card card-pad">
         <div className="card-title mb">{t('My account')}</div>
@@ -820,10 +822,16 @@ function AccountTab() {
           <input className="input" type="password" value={pwd.new_password} onChange={(e) => setPwd({ ...pwd, new_password: e.target.value })} autoComplete="new-password" />
         </Field>
         <div className="row wrap">
-          <button className="btn btn-primary" disabled={pwd.new_password.length < 8} onClick={() => run(() => api.put<{ token?: string }>('/auth/me', pwd), t('Password changed')).then((r) => {
+          <button
+            className="btn btn-primary"
+            disabled={pwd.new_password.length < 8}
+            onClick={() =>
+              run(() => api.put<{ token?: string }>('/auth/me', pwd), t('Password changed')).then((r) => {
                 if (r?.token) setToken(r.token);
                 setPwd({ current_password: '', new_password: '' });
-              })}>
+              })
+            }
+          >
             {t('Change password')}
           </button>
           <button
@@ -838,6 +846,8 @@ function AccountTab() {
         </div>
       </div>
     </div>
+    <TwoFactorCard client={api} base="/auth/2fa" disabled={!!user?.impersonator} />
+    </>
   );
 }
 

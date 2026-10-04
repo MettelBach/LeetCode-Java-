@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { platformDb, runWithTenant } from '../db/index.js';
 import { HttpError, idParam, nowSql } from '../lib/http.js';
 import { seedDemo } from '../services/demo-seed.js';
+import { checkSecondFactor, twoFactorRouter } from './two-factor.js';
 import { createAccount, getAccount, planById, platformMail, refreshAccountStats, type AccountRow } from '../services/platform.js';
 
 export interface AuthUser {
@@ -176,17 +177,24 @@ authRouter.post('/register', async (req, res) => {
 });
 
 authRouter.post('/login', (req, res) => {
-  const b = z.object({ email: z.string().max(200), password: z.string().max(200) }).parse(req.body);
+  const b = z.object({ email: z.string().max(200), password: z.string().max(200), code: z.string().max(10).optional() }).parse(req.body);
   const email = b.email.trim().toLowerCase();
   const key = `${req.ip}|${email}`;
   checkRate(key);
-  const u = platformDb.prepare('SELECT id, account_id, password_hash, active, token_version FROM users WHERE email = ?').get(email) as any;
+  const u = platformDb.prepare('SELECT id, account_id, password_hash, active, token_version, totp_enabled FROM users WHERE email = ?').get(email) as any;
   if (!u || !u.active || !bcrypt.compareSync(b.password, u.password_hash)) {
     failRate(key);
     throw new HttpError(401, 'Invalid e-mail or password');
   }
   const acc = getAccount(u.account_id);
   if (acc.status === 'closed') throw new HttpError(403, 'This account has been closed');
+  if (u.totp_enabled) {
+    if (!b.code) return void res.json({ two_factor_required: true });
+    if (!checkSecondFactor('users', u.id, b.code)) {
+      failRate(key);
+      throw new HttpError(401, 'Invalid two-factor code');
+    }
+  }
   clearRate(key);
   platformDb.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(nowSql(), u.id);
   res.json({ token: signUser(u) });
@@ -261,6 +269,8 @@ authRouter.put('/me', requireAuth, (req, res) => {
   delete out.token_version;
   res.json({ ...out, ...(token ? { token } : {}) });
 });
+
+authRouter.use('/2fa', requireAuth, twoFactorRouter('users', (req) => req.user?.id));
 
 /** Logs out on all devices. */
 authRouter.post('/logout-all', requireAuth, (req, res) => {
