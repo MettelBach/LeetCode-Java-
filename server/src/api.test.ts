@@ -248,4 +248,24 @@ describe('SaaS flow', () => {
     expect((await call('GET', '/auth/me', undefined, tokenA)).status).toBe(401);
     expect((await call('GET', '/auth/me', undefined, r.data.token)).status).toBe(200);
   });
+
+  it('stores sign-up attribution and exports Google Ads conversions', async () => {
+    const r = await call('POST', '/auth/register', {
+      company: 'Sklep Ads', name: 'Celina', email: 'ads@c.pl', password: 'password3', accept_terms: true,
+      attribution: { utm_source: 'google', utm_medium: 'cpc', gclid: 'Cj0KTEST', evil: 'x' },
+    });
+    expect(r.status).toBe(200);
+    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
+    const list = await call('GET', '/admin/accounts?search=Sklep Ads', undefined, login.data.token);
+    const acc = list.data.rows[0];
+    expect(acc.source).toBe('google / cpc');
+    const detail = await call('GET', `/admin/accounts/${acc.id}`, undefined, login.data.token);
+    expect(detail.data.attribution).toEqual({ utm_source: 'google', utm_medium: 'cpc', gclid: 'Cj0KTEST' });
+    await call('POST', `/admin/accounts/${acc.id}/payments`, { amount: 99, extend_days: 30 }, login.data.token);
+    const csv = await call('GET', '/admin/conversions.csv', undefined, login.data.token);
+    expect(csv.status).toBe(200);
+    expect(String(csv.data)).toContain('Cj0KTEST,,,Subscription paid,');
+    expect(String(csv.data)).toContain(',99.00,PLN');
+    expect((await call('GET', '/admin/conversions.csv', undefined, tokenA)).status).toBe(401);
+  });
 });

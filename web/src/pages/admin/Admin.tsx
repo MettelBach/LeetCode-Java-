@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, LogIn, LogOut, Search, Send, ShieldCheck, UserPlus } from 'lucide-react';
+import { Download, ExternalLink, LogIn, LogOut, Search, Send, ShieldCheck, UserPlus } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, Navigate, NavLink, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
@@ -181,6 +181,7 @@ export function AdminDashboard() {
 
 export function AdminAccounts() {
   const t = useT();
+  const run = useAction();
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get('search') ?? '');
@@ -197,6 +198,10 @@ export function AdminAccounts() {
     <>
       <div className="page-head">
         <h1 className="page-title">{t('Client accounts')}</h1>
+        <div className="spacer" />
+        <button className="btn" title={t('First payments of clients who came from Google Ads (last 90 days)')} onClick={() => run(() => adminApi.download('/conversions.csv', 'google-ads-conversions.csv'))}>
+          <Download size={16} /> {t('Google Ads conversions (CSV)')}
+        </button>
       </div>
       <div className="toolbar">
         <form
@@ -245,6 +250,7 @@ export function AdminAccounts() {
                 <th className="num">{t('Integrations')}</th>
                 <th className="num">{t('Balance')}</th>
                 <th className="num">{t('Tickets')}</th>
+                <th>{t('Source')}</th>
                 <th>{t('Last activity')}</th>
                 <th>{t('Created')}</th>
               </tr>
@@ -275,6 +281,7 @@ export function AdminAccounts() {
                     {money(a.balance)}
                   </td>
                   <td className="num">{a.open_tickets || '—'}</td>
+                  <td className="text-small">{a.source || '—'}</td>
                   <td>{fmtDateTime(a.last_activity_at)}</td>
                   <td>{fmtDate(a.created_at)}</td>
                 </tr>
@@ -476,6 +483,16 @@ export function AdminAccount() {
                   .filter(([, v]) => v !== 'std')
                   .map(([k, v]) => `${k}: ${v}`)
                   .join(', ') || '—'}
+              </dd>
+              <dt>{t('Acquisition')}:</dt>
+              <dd style={{ wordBreak: 'break-all' }}>
+                {Object.keys(a.attribution ?? {}).length
+                  ? Object.entries(a.attribution).map(([k, v]) => (
+                      <div key={k}>
+                        <span className="text-muted">{k}:</span> {String(v)}
+                      </div>
+                    ))
+                  : '—'}
               </dd>
             </dl>
           </div>

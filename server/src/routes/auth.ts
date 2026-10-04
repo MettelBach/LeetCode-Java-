@@ -7,7 +7,7 @@ import { config } from '../config.js';
 import { platformDb, runWithTenant } from '../db/index.js';
 import { HttpError, idParam, nowSql } from '../lib/http.js';
 import { seedDemo } from '../services/demo-seed.js';
-import { createAccount, getAccount, planById, platformMail, type AccountRow } from '../services/platform.js';
+import { createAccount, getAccount, planById, platformMail, refreshAccountStats, type AccountRow } from '../services/platform.js';
 
 export interface AuthUser {
   id: number;
@@ -162,12 +162,14 @@ authRouter.post('/register', async (req, res) => {
       language: z.enum(['pl', 'en', 'ru']).optional(),
       demo: z.boolean().optional(),
       accept_terms: z.literal(true, { message: 'You must accept the terms of service' }),
+      attribution: z.record(z.string(), z.string().max(500)).optional(),
     })
     .parse(req.body);
   checkRate(`reg|${req.ip}`, 5);
   failRate(`reg|${req.ip}`);
   const { accountId, userId } = createAccount(b);
   if (b.demo) await runWithTenant(accountId, () => seedDemo());
+  refreshAccountStats(accountId);
   const u = platformDb.prepare('SELECT id, account_id, token_version FROM users WHERE id = ?').get(userId) as any;
   platformMail(b.email, 'Witamy w SellHub', `Twoje konto ${b.company} zostało utworzone. Okres próbny: ${config.trialDays} dni.\n${config.appUrl}`).catch(() => undefined);
   res.json({ token: signUser(u) });

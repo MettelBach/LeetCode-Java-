@@ -102,4 +102,6 @@ export const platformMigrations: string[] = [
     UNIQUE (account_id, date, item)
   );
   `,
+  // Marketing attribution captured at sign-up (UTM, gclid, fbclid...).
+  `ALTER TABLE accounts ADD COLUMN attribution TEXT NOT NULL DEFAULT '{}';`,
 ];

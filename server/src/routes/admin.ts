@@ -93,6 +93,22 @@ adminRouter.get('/stats', (_req, res) => {
 
 /* ---------------------------------- accounts ---------------------------------- */
 
+/** Short marketing source label of an account ("google / cpc", "meta"...). */
+function acquisitionSource(raw: string) {
+  const at = parseJson<Record<string, string>>(raw, {});
+  if (at.utm_source) return [at.utm_source, at.utm_medium].filter(Boolean).join(' / ');
+  if (at.gclid || at.gbraid || at.wbraid) return 'google / cpc';
+  if (at.fbclid || at.fbc) return 'meta';
+  if (at.referrer) {
+    try {
+      return new URL(at.referrer).hostname;
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
 adminRouter.get('/accounts', (req, res) => {
   const w = ['1=1'];
   const p: unknown[] = [];
@@ -123,8 +139,37 @@ adminRouter.get('/accounts', (req, res) => {
          FROM accounts a WHERE ${where} ORDER BY a.id DESC LIMIT ? OFFSET ?`,
       )
       .all(...p, perPage, (page - 1) * perPage) as any[]
-  ).map((a) => ({ ...a, stats: parseJson(a.stats, {}), settings: undefined, balance: accountBalance(a.id) }));
+  ).map((a) => ({ ...a, stats: parseJson(a.stats, {}), settings: undefined, attribution: undefined, source: acquisitionSource(a.attribution), balance: accountBalance(a.id) }));
   res.json({ total, page, per_page: perPage, rows });
+});
+
+/**
+ * First payments of accounts that came from Google Ads, in the Google Ads
+ * offline conversion import format (Tools → Conversions → Uploads).
+ */
+adminRouter.get('/conversions.csv', (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 90));
+  const rows = platformDb
+    .prepare(
+      `SELECT a.id, a.attribution, b.created_at, -b.amount amount FROM accounts a
+       JOIN billing b ON b.id = (SELECT id FROM billing WHERE account_id = a.id AND amount < 0 ORDER BY created_at, id LIMIT 1)
+       WHERE b.created_at >= datetime('now', ?) ORDER BY b.created_at`,
+    )
+    .all(`-${days} days`) as { id: number; attribution: string; created_at: string; amount: number }[];
+  const cell = (v: string | number) => {
+    const s = String(v).replace(/^[=+\-@]/, "'$&");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = ['Parameters:TimeZone=+0000', 'Google Click ID,GBRAID,WBRAID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency'];
+  for (const r of rows) {
+    const at = parseJson<Record<string, string>>(r.attribution, {});
+    if (!at.gclid && !at.gbraid && !at.wbraid) continue;
+    lines.push([at.gclid ?? '', at.gbraid ?? '', at.wbraid ?? '', 'Subscription paid', r.created_at, r.amount.toFixed(2), 'PLN'].map(cell).join(','));
+  }
+  audit(req.staff!.id, null, 'conversions.export', `${lines.length - 2} rows`, req.ip ?? '');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="google-ads-conversions.csv"');
+  res.send(lines.join('\n') + '\n');
 });
 
 adminRouter.get('/accounts/:id', (req, res) => {
@@ -144,6 +189,7 @@ adminRouter.get('/accounts/:id', (req, res) => {
   res.json({
     ...a,
     settings: parseJson(a.settings, {}),
+    attribution: parseJson(a.attribution, {}),
     stats,
     accelerations: accountAccelerations(a.id),
     balance: accountBalance(a.id),

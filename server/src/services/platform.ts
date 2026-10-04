@@ -143,7 +143,36 @@ export interface AccountRow {
   stats: string;
   notes: string;
   last_activity_at: string | null;
+  attribution: string;
   created_at: string;
+}
+
+/** Marketing parameters stored with a new account (first touch). */
+export const ATTRIBUTION_KEYS = [
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_term',
+  'utm_content',
+  'gclid',
+  'gbraid',
+  'wbraid',
+  'fbclid',
+  'fbp',
+  'fbc',
+  'landing',
+  'referrer',
+  'first_seen',
+] as const;
+
+export function cleanAttribution(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const k of ATTRIBUTION_KEYS) {
+    const v = (raw as Record<string, unknown>)[k];
+    if (typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, 500);
+  }
+  return out;
 }
 
 export function getAccount(id: number): AccountRow {
@@ -152,15 +181,15 @@ export function getAccount(id: number): AccountRow {
   return a;
 }
 
-export function createAccount(input: { company: string; name: string; email: string; password: string; language?: string; phone?: string }) {
+export function createAccount(input: { company: string; name: string; email: string; password: string; language?: string; phone?: string; attribution?: unknown }) {
   const email = input.email.trim().toLowerCase();
   if (platformDb.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new HttpError(409, 'This e-mail is already registered');
   const lang = input.language ?? 'pl';
   const trialEnd = new Date(Date.now() + config.trialDays * 86400_000).toISOString().replace('T', ' ').slice(0, 19);
   const { accountId, userId } = platformDb.transaction(() => {
     const a = platformDb
-      .prepare(`INSERT INTO accounts (name, phone, plan, status, trial_ends_at, language) VALUES (?, ?, 'trial', 'trial', ?, ?)`)
-      .run(input.company.trim(), input.phone ?? '', trialEnd, lang);
+      .prepare(`INSERT INTO accounts (name, phone, plan, status, trial_ends_at, language, attribution) VALUES (?, ?, 'trial', 'trial', ?, ?, ?)`)
+      .run(input.company.trim(), input.phone ?? '', trialEnd, lang, JSON.stringify(cleanAttribution(input.attribution)));
     const accountId = Number(a.lastInsertRowid);
     const u = platformDb
       .prepare(`INSERT INTO users (account_id, email, name, password_hash, role, language) VALUES (?, ?, ?, ?, 'owner', ?)`)

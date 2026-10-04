@@ -3,10 +3,13 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { captureAttribution } from './attribution';
 import { AuthProvider } from './auth';
 import { ConfirmProvider, ToastProvider } from './components/ui';
 import { I18nProvider } from './i18n';
 import './styles.css';
+
+captureAttribution();
 
 const queryClient = new QueryClient({
   defaultOptions: {

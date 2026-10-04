@@ -1044,4 +1044,12 @@ export const pl: Record<string, string> = {
   "— choose template —": "— wybierz szablon —",
   "— choose —": "— wybierz —",
   "— do not send —": "— nie wysyłaj —",
+  "Google Ads conversions (CSV)": "Konwersje Google Ads (CSV)",
+  "First payments of clients who came from Google Ads (last 90 days)": "Pierwsze płatności klientów z Google Ads (ostatnie 90 dni)",
+  "Source": "Źródło",
+  "Acquisition": "Pozyskanie",
+  "SMTP port must be 25, 465, 587 or 2525": "Port SMTP musi być 25, 465, 587 lub 2525",
+  "Empik API address must be https://*.empik.com or https://*.mirakl.net": "Adres API Empik musi mieć postać https://*.empik.com lub https://*.mirakl.net",
+  "Invalid Empik API address": "Nieprawidłowy adres API Empik",
+  "the address points to a private network": "adres wskazuje na sieć prywatną",
 };

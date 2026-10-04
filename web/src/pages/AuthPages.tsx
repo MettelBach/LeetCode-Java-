@@ -1,3 +1,4 @@
+import { getAttribution } from '../attribution';
 import { useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -97,6 +98,7 @@ export function RegisterPage() {
     setError('');
     try {
       const r = await api.post('/auth/register', {
+        attribution: getAttribution(),
         company: f.company,
         name: f.name,
         email: f.email,
