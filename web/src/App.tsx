@@ -26,6 +26,7 @@ import ProductsPage from './pages/products/ProductsPage';
 import { CatalogsPage, DocumentNew, DocumentsPage, DocumentView, WarehousesPage } from './pages/products/Warehouses';
 import ReturnsPage, { ReturnDetail } from './pages/returns/ReturnsPage';
 import SettingsPage from './pages/settings/SettingsPage';
+import PackingPage from './pages/orders/PackingPage';
 import ShipmentsPage from './pages/ShipmentsPage';
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -90,6 +91,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/new" element={<AddOrder />} />
+        <Route path="orders/packing" element={<PackingPage />} />
         <Route path="orders/:id" element={<OrderCard />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="products/new" element={<ProductEdit />} />

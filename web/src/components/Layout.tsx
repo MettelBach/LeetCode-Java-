@@ -47,6 +47,7 @@ function useNav(): NavGroup[] {
       children: [
         { to: '/orders', label: t('Order list') },
         { to: '/orders/new', label: t('Add order') },
+        { to: '/orders/packing', label: t('Packing') },
         { to: '/shipments', label: t('Shipments') },
         { to: '/invoices', label: t('Invoices and receipts') },
         { to: '/returns', label: t('Returns') },

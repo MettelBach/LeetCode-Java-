@@ -392,7 +392,13 @@ export function duplicateOrder(id: number, user = 'System'): number {
 
 export function getOrderFull(id: number) {
   const o = getOrder(id);
-  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(id);
+  // Product EAN/location help when packing items imported without them.
+  const items = db
+    .prepare(
+      `SELECT i.*, p.ean AS product_ean, p.location AS product_location FROM order_items i
+       LEFT JOIN products p ON p.id = i.product_id WHERE i.order_id = ? ORDER BY i.id`,
+    )
+    .all(id);
   const history = db.prepare('SELECT * FROM order_history WHERE order_id = ? ORDER BY id DESC').all(id);
   const shipments = db.prepare('SELECT * FROM shipments WHERE order_id = ? ORDER BY id').all(id);
   const invoices = db
