@@ -5,7 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { DdItem, Dropdown, Empty, Field, Loading, MarketplaceLogo, Modal, Pager, Switch, useAction, useConfirm, useToast } from '../components/ui';
 import { useIntegrations } from '../data';
-import { fmtDateTime, money } from '../format';
+import { fmtDateTime, money, safeHref } from '../format';
 import { useT } from '../i18n';
 
 export default function OffersPage() {
@@ -215,8 +215,8 @@ export default function OffersPage() {
                               {t(o.status)}
                             </span>
                             {o.integration_name} · {o.external_id}{' '}
-                            {o.url && (
-                              <a href={o.url} target="_blank" rel="noreferrer" aria-label={t('Open on marketplace')}>
+                            {safeHref(o.url) && (
+                              <a href={safeHref(o.url)} target="_blank" rel="noreferrer noopener" aria-label={t('Open on marketplace')}>
                                 <ExternalLink size={12} />
                               </a>
                             )}

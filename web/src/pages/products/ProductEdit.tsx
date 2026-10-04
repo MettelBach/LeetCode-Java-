@@ -6,7 +6,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 import { api } from '../../api';
 import { Empty, Field, Loading, MarketplaceLogo, Modal, Tabs, useAction, useConfirm } from '../../components/ui';
 import { useSettings } from '../../data';
-import { fmtDateTime, money } from '../../format';
+import { fmtDateTime, money, safeHref } from '../../format';
 import { useT } from '../../i18n';
 import { useCategories, useManufacturers } from './ProductsPage';
 import { useCatalogs, useWarehouses } from './Warehouses';
@@ -482,8 +482,8 @@ function OffersTab({ product }: { product: any }) {
                   {o.title}
                   <div className="text-muted text-small">
                     {o.external_id}{' '}
-                    {o.url && (
-                      <a href={o.url} target="_blank" rel="noreferrer">
+                    {safeHref(o.url) && (
+                      <a href={safeHref(o.url)} target="_blank" rel="noreferrer noopener">
                         <ExternalLink size={12} />
                       </a>
                     )}

@@ -163,6 +163,7 @@ export default function OrdersPage() {
           sort={sort}
           dir={dir}
           onSort={(s, d) => setParam({ sort: s, dir: d })}
+          exportQuery={{ ...filters, view, status_id: statusId ?? undefined, sort, dir }}
           pager={<Pager page={page} perPage={perPage} total={orders.data?.total ?? 0} onPage={(p) => setParam({ page: String(p) }, false)} />}
           confirm={confirm}
         />
@@ -380,6 +381,7 @@ function OrdersToolbar({
   onSort,
   pager,
   confirm,
+  exportQuery,
 }: {
   selected: number[];
   rows: any[];
@@ -395,6 +397,7 @@ function OrdersToolbar({
   onSort: (s: string, d: string) => void;
   pager: React.ReactNode;
   confirm: ReturnType<typeof useConfirm>;
+  exportQuery: Record<string, any>;
 }) {
   const t = useT();
   const statuses = useStatuses();
@@ -540,8 +543,8 @@ function OrdersToolbar({
                 icon={<Download />}
                 onClick={() => {
                   close();
-                  const q = selected.length ? { ids: selected, view } : Object.fromEntries(new URLSearchParams(window.location.search));
-                  run(() => api.download('/orders/export.csv', 'orders.csv', q as any));
+                  const q = selected.length ? { ids: selected, view } : exportQuery;
+                  run(() => api.download('/orders/export.csv', 'orders.csv', q));
                 }}
               >
                 {selected.length ? t('Export selected to CSV') : t('Export list to CSV')}

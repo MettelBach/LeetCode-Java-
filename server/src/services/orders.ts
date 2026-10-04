@@ -315,7 +315,9 @@ export function restoreOrder(id: number, user = 'System') {
   db.prepare(`UPDATE orders SET deleted = 0, archived = 0, updated_at = datetime('now') WHERE id = ?`).run(id);
   addHistory(id, 'Order restored', 'edit', user);
   const settings = getSetting('orders', { stock_deduct: 'on_create' } as any);
-  if (settings.stock_deduct === 'on_create') deductOrderStock(id);
+  const st = db.prepare('SELECT s.system_key FROM orders o JOIN order_statuses s ON s.id = o.status_id WHERE o.id = ?').get(id) as { system_key: string | null };
+  // A canceled order keeps its stock returned.
+  if (settings.stock_deduct === 'on_create' && st?.system_key !== 'canceled') deductOrderStock(id);
 }
 
 export function setArchived(id: number, archived: boolean, user = 'System') {

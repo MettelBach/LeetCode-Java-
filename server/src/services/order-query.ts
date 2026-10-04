@@ -52,7 +52,7 @@ export function filtersFromQuery(query: Record<string, unknown>): OrderFilters {
     buyer: q.str(query.buyer),
     product: q.str(query.product),
     comment: q.str(query.comment),
-    ids: q.ints(query.ids),
+    ids: q.ints(query.ids).slice(0, 1000),
     sort: q.str(query.sort),
     dir: query.dir === 'asc' ? 'asc' : 'desc',
     page: Math.max(1, q.int(query.page) ?? 1),

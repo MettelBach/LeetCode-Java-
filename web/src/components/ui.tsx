@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Inbox, X } from 'lucide-react';
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../i18n';
 
@@ -295,10 +295,14 @@ export function MarketplaceLogo({ type, size = 54 }: { type: string; size?: numb
 }
 
 export function Field({ label, children, help, className = '' }: { label?: ReactNode; children: ReactNode; help?: ReactNode; className?: string }) {
+  const autoId = useId();
+  // Connect the label with a single form control (accessibility, click on label focuses the input).
+  const only = Children.count(children) === 1 && isValidElement(children) && ['input', 'select', 'textarea'].includes(children.type as string) ? (children as ReactElement<any>) : null;
+  const id = only ? (only.props.id ?? autoId) : undefined;
   return (
     <div className={`field ${className}`}>
-      {label && <label>{label}</label>}
-      {children}
+      {label && <label htmlFor={id}>{label}</label>}
+      {only ? cloneElement(only, { id }) : children}
       {help && <span className="help-text">{help}</span>}
     </div>
   );

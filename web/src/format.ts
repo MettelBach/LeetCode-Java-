@@ -67,3 +67,8 @@ export function flag(cc?: string): string {
   if (!cc || cc.length !== 2) return '';
   return String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 }
+
+/** Only http(s) links from external data (marketplaces) may be rendered as href. */
+export function safeHref(url?: string | null): string | undefined {
+  return url && /^https?:\/\//i.test(url) ? url : undefined;
+}

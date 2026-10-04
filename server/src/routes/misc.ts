@@ -4,6 +4,7 @@ import { db, getSetting, parseJson, platformDb, runWithTenant, setSetting } from
 import { HttpError, idParam, q } from '../lib/http.js';
 import { ACTION_TYPES, CONDITION_FIELDS, EVENTS, runRulesFor } from '../services/automation.js';
 import { orderTotal } from '../services/orders.js';
+import { assertPublicHttpsUrl } from '../lib/net.js';
 import { requireAdmin, userName } from './auth.js';
 
 /* ----------------------------- automatic actions ----------------------------- */
@@ -37,9 +38,9 @@ rulesRouter.get('/', (_req, res) => {
   res.json(rows);
 });
 
-rulesRouter.post('/', (req, res) => {
+rulesRouter.post('/', requireAdmin, async (req, res) => {
   const b = ruleSchema.parse(req.body);
-  validateRule(b);
+  await validateRule(b);
   const sort = ((db.prepare('SELECT MAX(sort) m FROM rules').get() as { m: number }).m ?? 0) + 1;
   const r = db
     .prepare('INSERT INTO rules (name, enabled, event, conditions, actions, sort) VALUES (?, ?, ?, ?, ?, ?)')
@@ -47,11 +48,14 @@ rulesRouter.post('/', (req, res) => {
   res.json({ id: Number(r.lastInsertRowid) });
 });
 
-function validateRule(b: z.infer<typeof ruleSchema>) {
+async function validateRule(b: z.infer<typeof ruleSchema>) {
   for (const a of b.actions) {
     if (a.type === 'webhook') {
-      const url = String(a.params.url ?? '');
-      if (!/^https:\/\//.test(url)) throw new HttpError(400, 'Webhook URL must start with https://');
+      try {
+        await assertPublicHttpsUrl(String(a.params.url ?? ''));
+      } catch (e: any) {
+        throw new HttpError(400, `Webhook URL: ${e.message}`);
+      }
     }
     if (a.type === 'set_status' && !db.prepare('SELECT 1 FROM order_statuses WHERE id = ?').get(Number(a.params.status_id))) {
       throw new HttpError(400, 'Action "set status": choose a status');
@@ -62,10 +66,10 @@ function validateRule(b: z.infer<typeof ruleSchema>) {
   }
 }
 
-rulesRouter.put('/:id', (req, res) => {
+rulesRouter.put('/:id', requireAdmin, async (req, res) => {
   const id = idParam(req);
   const b = ruleSchema.parse(req.body);
-  validateRule(b);
+  await validateRule(b);
   const r = db
     .prepare('UPDATE rules SET name = ?, enabled = ?, event = ?, conditions = ?, actions = ? WHERE id = ?')
     .run(b.name, b.enabled === false ? 0 : 1, b.event, JSON.stringify(b.conditions), JSON.stringify(b.actions), id);
@@ -73,13 +77,13 @@ rulesRouter.put('/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-rulesRouter.patch('/:id', (req, res) => {
+rulesRouter.patch('/:id', requireAdmin, (req, res) => {
   const b = z.object({ enabled: z.boolean() }).parse(req.body);
   db.prepare('UPDATE rules SET enabled = ? WHERE id = ?').run(b.enabled ? 1 : 0, idParam(req));
   res.json({ ok: true });
 });
 
-rulesRouter.delete('/:id', (req, res) => {
+rulesRouter.delete('/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM rules WHERE id = ?').run(idParam(req));
   res.json({ ok: true });
 });

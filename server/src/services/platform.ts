@@ -98,7 +98,11 @@ export function setAccelerations(accountId: number, patch: Partial<AccelSettings
 export function chargeAccelerations(accountId: number, day: Date) {
   const date = day.toISOString().slice(0, 10);
   const acc = accountAccelerations(accountId);
-  const ins = platformDb.prepare('INSERT OR IGNORE INTO billing (account_id, date, item, description, amount) VALUES (?, ?, ?, ?, ?)');
+  // The most expensive option used during a day is billed for that day.
+  const ins = platformDb.prepare(
+    `INSERT INTO billing (account_id, date, item, description, amount) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(account_id, date, item) DO UPDATE SET amount = excluded.amount, description = excluded.description WHERE excluded.amount > billing.amount`,
+  );
   for (const [kind, id] of Object.entries(acc)) {
     const o = accelOption(kind, id);
     if (o.price > 0) ins.run(accountId, date, `accel:${kind}`, `Akceleracja ${kind}: ${id}`, o.price);
@@ -187,6 +191,9 @@ export function deleteAccount(accountId: number) {
 export function updateAccountStatuses() {
   const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
   platformDb.prepare(`UPDATE accounts SET status = 'suspended' WHERE status = 'trial' AND trial_ends_at IS NOT NULL AND trial_ends_at < ?`).run(now);
+  // Paid accounts get a 7-day grace period after the paid period ends.
+  const grace = new Date(Date.now() - 7 * 86400_000).toISOString().replace('T', ' ').slice(0, 19);
+  platformDb.prepare(`UPDATE accounts SET status = 'suspended' WHERE status = 'active' AND paid_until IS NOT NULL AND paid_until < ?`).run(grace);
 }
 
 export function activeAccountIds(): number[] {

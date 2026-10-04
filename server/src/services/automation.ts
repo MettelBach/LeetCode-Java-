@@ -8,6 +8,7 @@ import { addHistory, changeStatus, getOrder, orderTotal, setArchived, updateOrde
 import { issueForOrder } from './invoices.js';
 import { createShipment } from './shipments.js';
 import { sendTemplateEmail } from './email.js';
+import { assertPublicHttpsUrl } from '../lib/net.js';
 
 export const EVENTS: EventName[] = [
   'order_created',
@@ -195,10 +196,15 @@ async function runAction(a: Action, orderId: number, payload: EventPayload, rule
       setArchived(orderId, true, user);
       return 'archived';
     case 'webhook': {
-      const url = String(p.url ?? '');
-      if (!/^https?:\/\//.test(url)) return 'webhook skipped: invalid URL';
+      let url: URL;
+      try {
+        url = await assertPublicHttpsUrl(String(p.url ?? ''));
+      } catch (e: any) {
+        return `webhook skipped: ${e.message}`;
+      }
       const o = getOrder(orderId);
       const res = await fetch(url, {
+        redirect: 'manual',
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ event: payload, order: { ...o, total: orderTotal(orderId) } }),
