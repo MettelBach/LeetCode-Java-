@@ -257,3 +257,20 @@ describe('Allegro handling time', () => {
     expect(allegroHandlingTime(90)).toBe('P60D');
   });
 });
+
+describe('NBP rate', () => {
+  it('takes the last rate before the date', async () => {
+    const { nbpRateBefore } = await import('./services/nbp.js');
+    let asked = '';
+    const fake = (async (url: string) => {
+      asked = url;
+      return new Response(JSON.stringify({ rates: [
+        { no: '191/A/NBP/2026', effectiveDate: '2026-10-01', mid: 4.25 },
+        { no: '192/A/NBP/2026', effectiveDate: '2026-10-02', mid: 4.27 },
+      ] }));
+    }) as unknown as typeof fetch;
+    const r = await nbpRateBefore('EUR', '2026-10-05', fake);
+    expect(r).toEqual({ rate: 4.27, date: '2026-10-02', table: '192/A/NBP/2026' });
+    expect(asked).toContain('/rates/a/eur/2026-09-25/2026-10-04/');
+  });
+});

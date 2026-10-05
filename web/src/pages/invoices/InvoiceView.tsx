@@ -175,8 +175,26 @@ export default function InvoiceView() {
                 <dd>
                   <Link to={`/invoices/${v.corrected.id}`}>{v.corrected.number}</Link>
                 </dd>
+                {v.corrected.previous_correction && (
+                  <>
+                    <dt>{t('Previous correction')}:</dt>
+                    <dd>
+                      <Link to={`/invoices/${v.corrected.previous_correction.id}`}>{v.corrected.previous_correction.number}</Link>
+                    </dd>
+                  </>
+                )}
                 <dt>{t('Reason')}:</dt>
                 <dd>{v.correction_reason}</dd>
+              </>
+            )}
+            {v.currency !== 'PLN' && (
+              <>
+                <dt>{t('NBP rate')}:</dt>
+                <dd>
+                  {v.exchange_rate
+                    ? `${Number(v.exchange_rate).toFixed(4)} (${v.exchange_rate_date}, ${v.exchange_rate_table})`
+                    : t('not downloaded — VAT in PLN is not shown on the document')}
+                </dd>
               </>
             )}
           </dl>

@@ -5,7 +5,7 @@ import { isValidDateTime } from '../lib/dates.js';
 import { HttpError, idParam } from '../lib/http.js';
 import { runRulesFor } from '../services/automation.js';
 import { sendEmail, sendTemplateEmail } from '../services/email.js';
-import { issueForOrder } from '../services/invoices.js';
+import { issueForOrderWithRate } from '../services/invoices.js';
 import { filtersFromQuery, listOrderIds, listOrders, type OrderFilters } from '../services/order-query.js';
 import {
   addHistory,
@@ -278,7 +278,7 @@ ordersRouter.post('/:id/email', async (req, res) => {
   }
 });
 
-ordersRouter.post('/:id/documents', (req, res) => {
+ordersRouter.post('/:id/documents', async (req, res) => {
   const b = z
     .object({
       type: z.enum(['invoice', 'proforma', 'receipt']),
@@ -289,7 +289,7 @@ ordersRouter.post('/:id/documents', (req, res) => {
       notes: z.string().max(2000).optional(),
     })
     .parse(req.body);
-  res.json({ id: issueForOrder(idParam(req), b.type, { ...b, user: userName(req) }) });
+  res.json({ id: await issueForOrderWithRate(idParam(req), b.type, { ...b, user: userName(req) }) });
 });
 
 const shipmentSchema = z.object({
@@ -392,10 +392,10 @@ ordersRouter.post('/bulk', async (req, res) => {
           updateOrder(id, { star: 0 }, user);
           break;
         case 'invoice':
-          issueForOrder(id, 'invoice', { series_id: p.series_id ? Number(p.series_id) : undefined, user });
+          await issueForOrderWithRate(id, 'invoice', { series_id: p.series_id ? Number(p.series_id) : undefined, user });
           break;
         case 'receipt':
-          issueForOrder(id, 'receipt', { series_id: p.series_id ? Number(p.series_id) : undefined, user });
+          await issueForOrderWithRate(id, 'receipt', { series_id: p.series_id ? Number(p.series_id) : undefined, user });
           break;
         case 'email':
           await sendTemplateEmail(id, Number(p.template_id), user);

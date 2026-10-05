@@ -152,6 +152,13 @@ export async function invoicePdf(id: number): Promise<Buffer> {
   if (inv.payment_method) doc.text(`Sposób płatności: ${inv.payment_method}`, 40, y);
   doc.text(`Status: ${inv.paid ? 'zapłacono' : 'do zapłaty'}`);
   if (inv.seller.bank_account) doc.text(`Konto bankowe: ${inv.seller.bank_account} ${inv.seller.bank_name ?? ''}`);
+  if (inv.currency !== 'PLN' && inv.exchange_rate) {
+    // VAT in PLN at the NBP rate of the last working day before the sale (art. 31a ustawy o VAT).
+    doc.text(
+      `Kurs NBP ${inv.currency}/PLN: ${Number(inv.exchange_rate).toFixed(4)} z dnia ${inv.exchange_rate_date} (tabela ${inv.exchange_rate_table}). ` +
+        `VAT w PLN: ${money(Math.round(inv.total_tax * inv.exchange_rate * 100) / 100)} PLN`,
+    );
+  }
   if (inv.notes) doc.moveDown().text(`Uwagi: ${inv.notes}`);
   doc.moveDown(4);
   const sy = doc.y;

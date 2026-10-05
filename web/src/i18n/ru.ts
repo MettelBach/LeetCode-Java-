@@ -1577,4 +1577,9 @@ export const ru: Record<string, string> = {
   "Invalid sale date": "Неверная дата продажи",
   "Invalid date": "Неверная дата",
   "Unknown status": "Неизвестный статус",
+  "Previous correction": "Предыдущая корректировка",
+  "NBP rate": "Курс NBP",
+  "not downloaded — VAT in PLN is not shown on the document": "не загружен — НДС в PLN не показан в документе",
+  "The order is canceled": "Заказ отменён",
+  "The order has no delivery address or pick-up point": "В заказе нет адреса доставки или пункта выдачи",
 };

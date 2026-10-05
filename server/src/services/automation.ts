@@ -5,7 +5,7 @@
 import { db, parseJson } from '../db/index.js';
 import { onEvent, type EventName, type EventPayload } from './events.js';
 import { addHistory, changeStatus, getOrder, orderTotal, setArchived, updateOrder } from './orders.js';
-import { issueForOrder } from './invoices.js';
+import { issueForOrderWithRate } from './invoices.js';
 import { createShipment } from './shipments.js';
 import { sendTemplateEmail } from './email.js';
 import { assertPublicHttpsUrl } from '../lib/net.js';
@@ -167,14 +167,14 @@ async function runAction(a: Action, orderId: number, payload: EventPayload, rule
       return `email: ${await sendTemplateEmail(orderId, Number(p.template_id), user)}`;
     case 'issue_invoice':
       try {
-        issueForOrder(orderId, 'invoice', { series_id: p.series_id ? Number(p.series_id) : undefined, user, meta });
+        await issueForOrderWithRate(orderId, 'invoice', { series_id: p.series_id ? Number(p.series_id) : undefined, user, meta });
         return 'invoice issued';
       } catch (e: any) {
         return `invoice skipped: ${e.message}`;
       }
     case 'issue_receipt':
       try {
-        issueForOrder(orderId, 'receipt', { series_id: p.series_id ? Number(p.series_id) : undefined, user, meta });
+        await issueForOrderWithRate(orderId, 'receipt', { series_id: p.series_id ? Number(p.series_id) : undefined, user, meta });
         return 'receipt issued';
       } catch (e: any) {
         return `receipt skipped: ${e.message}`;

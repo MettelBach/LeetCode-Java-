@@ -54,6 +54,12 @@ export function createShipment(orderId: number, input: ShipmentInput, user = 'Sy
     (db.prepare('SELECT COALESCE(SUM(weight * quantity), 0) w FROM order_items WHERE order_id = ?').get(orderId) as { w: number }).w;
   const cod = input.cod_amount ?? (o.payment_cod ? Math.max(0, orderTotal(orderId) - o.paid_amount) : 0);
   if (o.deleted) throw new HttpError(409, 'The order is in the bin');
+  const st = db.prepare('SELECT system_key FROM order_statuses WHERE id = ?').get(o.status_id) as { system_key: string | null } | undefined;
+  if (st?.system_key === 'canceled') throw new HttpError(409, 'The order is canceled');
+  // A parcel needs somewhere to go: a pick-up point or a full address.
+  if (!o.delivery_point_id && !(o.delivery_address && o.delivery_postcode && o.delivery_city)) {
+    throw new HttpError(400, 'The order has no delivery address or pick-up point');
+  }
   // Without a connected courier API and without a real tracking number the shipment is only a
   // simulation (test label): its number is never sent to a marketplace or a customer.
   const simulated = input.tracking_number?.trim() ? 0 : 1;

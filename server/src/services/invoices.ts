@@ -2,6 +2,7 @@ import { db, getSetting, parseJson, tx } from '../db/index.js';
 import { addDays, isValidDate, warsawToday } from '../lib/dates.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
+import { nbpRateBefore, type NbpRate } from './nbp.js';
 import { addHistory, getOrder } from './orders.js';
 
 export type InvoiceType = 'invoice' | 'proforma' | 'receipt' | 'correction';
@@ -137,6 +138,24 @@ export interface IssueOptions {
   notes?: string;
   /** Automation chain the document is issued from (loop protection). */
   meta?: { depth?: number; ruleIds?: number[] };
+  exchange?: NbpRate | null;
+}
+
+/**
+ * Issues a document for an order; for a foreign currency the NBP rate is
+ * fetched first (best effort — without it the document is issued without the PLN tax line).
+ */
+export async function issueForOrderWithRate(orderId: number, type: Exclude<InvoiceType, 'correction'>, opts: IssueOptions = {}): Promise<number> {
+  const o = getOrder(orderId);
+  let exchange: NbpRate | null = null;
+  if (o.currency !== 'PLN' && type !== 'receipt') {
+    try {
+      exchange = await nbpRateBefore(o.currency, opts.sale_date ?? String(o.date_add).slice(0, 10));
+    } catch {
+      exchange = null;
+    }
+  }
+  return issueForOrder(orderId, type, { ...opts, exchange });
 }
 
 export function issueForOrder(orderId: number, type: Exclude<InvoiceType, 'correction'>, opts: IssueOptions = {}): number {
@@ -170,6 +189,7 @@ export function issueForOrder(orderId: number, type: Exclude<InvoiceType, 'corre
     items,
     payment_due_days: opts.payment_due_days,
     notes,
+    exchange: opts.exchange,
   });
   const inv = db.prepare('SELECT number FROM invoices WHERE id = ?').get(id) as { number: string };
   const label = type === 'receipt' ? 'Receipt' : type === 'proforma' ? 'Pro forma' : 'Invoice';
@@ -193,6 +213,7 @@ export interface CreateInvoiceInput {
   corrected_invoice_id?: number;
   correction_reason?: string;
   notes?: string;
+  exchange?: NbpRate | null;
 }
 
 export function createInvoice(input: CreateInvoiceInput): number {
@@ -211,8 +232,8 @@ export function createInvoice(input: CreateInvoiceInput): number {
     const r = db
       .prepare(
         `INSERT INTO invoices (order_id, series_id, type, number, seq, period, issue_date, sale_date, payment_due, payment_method, paid, currency,
-          buyer, seller, items, total_net, total_tax, total_gross, corrected_invoice_id, correction_reason, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          buyer, seller, items, total_net, total_tax, total_gross, corrected_invoice_id, correction_reason, notes, exchange_rate, exchange_rate_date, exchange_rate_table)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.order_id ?? null,
@@ -247,6 +268,9 @@ export function createInvoice(input: CreateInvoiceInput): number {
         input.corrected_invoice_id ?? null,
         input.correction_reason ?? '',
         input.notes ?? '',
+        input.exchange?.rate ?? null,
+        input.exchange?.date ?? '',
+        input.exchange?.table ?? '',
       );
     return Number(r.lastInsertRowid);
   });
@@ -293,6 +317,7 @@ export function createCorrection(invoiceId: number, items: InvoiceItem[], reason
     items,
     corrected_invoice_id: original.id,
     correction_reason: reason,
+    exchange: original.exchange_rate ? { rate: original.exchange_rate, date: original.exchange_rate_date, table: original.exchange_rate_table } : null,
   });
   if (inv.order_id) {
     const c = db.prepare('SELECT number FROM invoices WHERE id = ?').get(id) as { number: string };
