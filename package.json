@@ -7,8 +7,12 @@
     "dev:server": "npm --prefix server run dev",
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web run build && npm --prefix server run build",
-    "start": "NODE_ENV=production node server/dist/index.js",
+    "start": "node --env-file-if-exists=.env server/dist/index.js",
     "test": "npm --prefix server test",
-    "i18n:check": "node web/scripts/i18n-check.mjs"
+    "i18n:check": "node web/scripts/i18n-check.mjs",
+    "local": "node server/dist/index.js"
+  },
+  "engines": {
+    "node": ">=22.9"
   }
 }

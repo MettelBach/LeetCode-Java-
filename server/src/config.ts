@@ -34,7 +34,7 @@ export const config = {
   brandName: process.env.BRAND_NAME ?? 'SellHub',
   port: Number(process.env.PORT ?? 3001),
   /** Public URL of the app — used in links (order page, OAuth redirect). */
-  appUrl: process.env.APP_URL ?? 'http://localhost:5173',
+  appUrl: process.env.APP_URL ?? `http://localhost:${process.env.PORT ?? 3001}`,
   dataDir: process.env.DATA_DIR ?? path.resolve(here, '../../data'),
   get jwtSecret(): string {
     return process.env.JWT_SECRET || (jwtFallback ??= localSecret('jwt'));
