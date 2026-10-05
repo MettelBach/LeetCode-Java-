@@ -36,7 +36,7 @@ SaaS-панель для интернет-продавцов: заказы со 
 
 ## Запуск на своём компьютере (без Docker)
 
-1. Установите **Node.js 22 LTS** с https://nodejs.org (при установке на Windows можно оставить всё по умолчанию).
+1. Установите **Node.js 22 или 24 LTS** с https://nodejs.org (при установке на Windows можно оставить всё по умолчанию; Visual Studio не нужен).
 2. Скачайте проект: `git clone https://github.com/MettelBach/LeetCode-Java-.git -b claude/upbeat-darwin-kpx1l0 sellhub` (или «Code → Download ZIP» на GitHub и распакуйте).
 3. Запустите:
    - **Windows:** двойной клик по `start-local.bat`;
