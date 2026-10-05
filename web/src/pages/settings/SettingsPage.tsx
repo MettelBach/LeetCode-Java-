@@ -158,6 +158,13 @@ function OrdersTab() {
             <Switch checked={!!f.stock_restore_on_cancel} onChange={(v) => setF({ ...f, stock_restore_on_cancel: v })} /> {t('Return stock when the order is canceled')}
           </label>
         </Field>
+        {String(f.stock_deduct).startsWith('status:') && (
+          <Field label=" " help={t('Reserved goods stay in the warehouse but are not offered on marketplaces')}>
+            <label className="check-label" style={{ height: 40 }}>
+              <Switch checked={!!f.stock_reserve} onChange={(v) => setF({ ...f, stock_reserve: v })} /> {t('Reserve stock until the order reaches this status')}
+            </label>
+          </Field>
+        )}
         <Field label={t('Name of additional field 1')}>
           <input className="input" value={f.extra_field_1_label} onChange={(e) => setF({ ...f, extra_field_1_label: e.target.value })} placeholder={t('Additional field 1')} />
         </Field>

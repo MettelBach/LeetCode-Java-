@@ -219,6 +219,7 @@ const SETTINGS_SCHEMAS = {
   orders: z.object({
     stock_deduct: z.string().regex(/^(on_create|never|status:\d+)$/),
     stock_restore_on_cancel: z.boolean(),
+    stock_reserve: z.boolean(),
     default_tax_rate: z.number().min(0).max(100),
     orders_per_page: z.number().int().min(10).max(1000),
     extra_field_1_label: z.string().max(60),

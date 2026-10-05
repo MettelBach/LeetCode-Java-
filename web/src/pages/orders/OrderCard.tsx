@@ -37,6 +37,7 @@ import { COURIER_NAMES, useEmailTemplates, useInvalidateOrders, useInvoiceSeries
 import { COUNTRIES, fmtDateTime, money } from '../../format';
 import { useT } from '../../i18n';
 import { AddOrderButton } from './StatusColumn';
+import { historyText, SHIP_STATUS_LABEL } from './historyText';
 
 export default function OrderCard() {
   const { id } = useParams();
@@ -1379,16 +1380,7 @@ const SHIP_PROGRESS: Record<string, number> = {
   canceled: 0,
 };
 
-export const SHIP_STATUS_LABEL: Record<string, string> = {
-  created: 'Created',
-  label_printed: 'Label printed',
-  picked_up: 'Picked up by the courier',
-  in_transit: 'In transit',
-  out_for_delivery: 'Out for delivery',
-  delivered: 'Delivered',
-  returned: 'Returned to sender',
-  canceled: 'Canceled',
-};
+export { SHIP_STATUS_LABEL };
 
 function ShipmentsCard({ o }: { o: any }) {
   const t = useT();
@@ -1579,7 +1571,7 @@ function HistoryCard({ o }: { o: any }) {
           <div className="h" key={h.id}>
             <span className="when">{fmtDateTime(h.created_at)}</span>
             <span className="text-muted">{h.user_name}</span>
-            <span style={{ color: h.type === 'error' ? 'var(--red)' : undefined }}>{h.message}</span>
+            <span style={{ color: h.type === 'error' ? 'var(--red)' : undefined }}>{historyText(h.message, t)}</span>
           </div>
         ))}
         {!rows.length && <div className="text-muted" style={{ padding: '0 22px 18px' }}>{t('No entries')}</div>}

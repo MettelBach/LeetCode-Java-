@@ -102,10 +102,9 @@ export function setStock(productId: number, value: number, reason: string, wareh
 
 /** Moves the reservation counter of a product in a warehouse. */
 function changeReserved(productId: number, warehouseId: number, delta: number) {
-  db.prepare(
-    `INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?, ?, 0, MAX(0, ?))
-     ON CONFLICT(product_id, warehouse_id) DO UPDATE SET reserved = MAX(0, reserved + excluded.reserved)`,
-  ).run(productId, warehouseId, delta);
+  // (excluded.reserved cannot carry a negative delta through a clamped insert value.)
+  db.prepare('INSERT INTO product_stock (product_id, warehouse_id, stock, reserved) VALUES (?, ?, 0, 0) ON CONFLICT(product_id, warehouse_id) DO NOTHING').run(productId, warehouseId);
+  db.prepare('UPDATE product_stock SET reserved = MAX(0, reserved + ?) WHERE product_id = ? AND warehouse_id = ?').run(delta, productId, warehouseId);
 }
 
 /**
@@ -165,6 +164,21 @@ export function deductOrderStock(orderId: number) {
   });
 }
 
+/**
+ * Net stock movement of an order per product and warehouse: deductions, edits of
+ * the order lines, returns and earlier restores. Restoring reverses exactly this,
+ * so a changed bundle composition or warehouse cannot return more than was taken.
+ */
+export function orderStockMovements(orderId: number) {
+  return db
+    .prepare(
+      `SELECT product_id, warehouse_id, SUM(change) qty FROM stock_history
+       WHERE order_id = ? AND doc_id IS NULL AND warehouse_id IS NOT NULL
+       GROUP BY product_id, warehouse_id HAVING SUM(change) != 0`,
+    )
+    .all(orderId) as { product_id: number; warehouse_id: number; qty: number }[];
+}
+
 /** Returns previously deducted stock of an order back to the warehouse. */
 export function restoreOrderStock(orderId: number) {
   tx(() => {
@@ -172,8 +186,10 @@ export function restoreOrderStock(orderId: number) {
     if (!o) return;
     releaseOrderStock(orderId);
     if (!o.stock_deducted) return;
-    const wh = orderWarehouse(orderId);
-    for (const it of orderStockLines(orderId)) adjustStock(it.product_id, it.quantity, 'order_restore', wh, { orderId, allowNegative: true });
+    for (const m of orderStockMovements(orderId)) {
+      if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(m.product_id) || stockIsDerived(m.product_id)) continue;
+      adjustStock(m.product_id, -m.qty, 'order_restore', m.warehouse_id, { orderId, allowNegative: true });
+    }
     db.prepare('UPDATE orders SET stock_deducted = 0 WHERE id = ?').run(orderId);
   });
 }
@@ -202,16 +218,80 @@ export function releaseOrderStock(orderId: number) {
   for (const it of lines) emitStockChanged(it.product_id);
 }
 
+/** Stock-holding products of one order line (a bundle → its components). */
+function lineStockProducts(productId: number, quantity: number): { product_id: number; quantity: number }[] {
+  const p = db.prepare('SELECT is_bundle FROM products WHERE id = ?').get(productId) as { is_bundle: number } | undefined;
+  if (!p) return [];
+  if (p.is_bundle) {
+    return (db.prepare('SELECT product_id, quantity FROM bundle_items WHERE bundle_id = ?').all(productId) as { product_id: number; quantity: number }[]).map((c) => ({
+      product_id: c.product_id,
+      quantity: c.quantity * quantity,
+    }));
+  }
+  return stockIsDerived(productId) ? [] : [{ product_id: productId, quantity }];
+}
+
+/**
+ * An order line changed after the stock was taken or reserved: `quantityDelta`
+ * more units of `productId` are ordered (negative = fewer). Deducted orders move
+ * the stock, reserved ones move the reservation; others are not affected.
+ */
+export function orderLineChanged(orderId: number, productId: number, quantityDelta: number, reason = 'order_edit') {
+  if (!quantityDelta) return;
+  const o = db.prepare('SELECT stock_deducted, stock_reserved FROM orders WHERE id = ?').get(orderId) as { stock_deducted: number; stock_reserved: number } | undefined;
+  if (!o) return;
+  const wh = orderWarehouse(orderId);
+  for (const c of lineStockProducts(productId, quantityDelta)) {
+    if (o.stock_deducted) adjustStock(c.product_id, -c.quantity, reason, wh, { orderId, allowNegative: true });
+    else if (o.stock_reserved) {
+      changeReserved(c.product_id, wh, c.quantity);
+      emitStockChanged(c.product_id);
+    }
+  }
+}
+
+/**
+ * Moves the record of taken stock of `quantity` units of a line from one order to
+ * another (order split) without changing the warehouse: a pair of zero-sum
+ * history entries, so that restoring either order returns exactly its goods.
+ */
+export function transferOrderStock(fromOrderId: number, toOrderId: number, productId: number, quantity: number) {
+  const wh = orderWarehouse(fromOrderId);
+  const ins = db.prepare(
+    'INSERT INTO stock_history (product_id, change, stock_after, reason, order_id, warehouse_id, user_name) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const c of lineStockProducts(productId, quantity)) {
+    const now = warehouseStock(c.product_id, wh);
+    ins.run(c.product_id, c.quantity, now, 'order_split', fromOrderId, wh, '');
+    ins.run(c.product_id, -c.quantity, now, 'order_split', toOrderId, wh, '');
+  }
+}
+
+/**
+ * Puts returned units of an order line back into the order's warehouse, never
+ * more than the order actually took (an order whose stock was not deducted
+ * returns nothing). Returns the number of units put back per stock product.
+ */
+export function returnOrderLineStock(orderId: number, productId: number, quantity: number, user = '') {
+  const wh = orderWarehouse(orderId);
+  let back = 0;
+  for (const c of lineStockProducts(productId, quantity)) {
+    const net = (
+      db.prepare('SELECT COALESCE(SUM(change), 0) s FROM stock_history WHERE order_id = ? AND product_id = ? AND warehouse_id = ? AND doc_id IS NULL').get(orderId, c.product_id, wh) as {
+        s: number;
+      }
+    ).s;
+    const qty = Math.min(c.quantity, Math.max(0, -net));
+    if (qty > 0) adjustStock(c.product_id, qty, 'return', wh, { orderId, allowNegative: true, user });
+    back += qty;
+  }
+  return back;
+}
+
 /** Adjusts stock of a single order line in the order's warehouse (line added/changed after deduction). */
 export function adjustOrderItemStock(orderId: number, productId: number, change: number, reason: string) {
-  const p = db.prepare('SELECT is_bundle FROM products WHERE id = ?').get(productId) as { is_bundle: number } | undefined;
-  if (!p) return;
   const wh = orderWarehouse(orderId);
-  if (p.is_bundle) {
-    for (const c of db.prepare('SELECT product_id, quantity FROM bundle_items WHERE bundle_id = ?').all(productId) as { product_id: number; quantity: number }[]) {
-      adjustStock(c.product_id, change * c.quantity, reason, wh, { orderId, allowNegative: true });
-    }
-  } else if (!stockIsDerived(productId)) adjustStock(productId, change, reason, wh, { orderId, allowNegative: true });
+  for (const c of lineStockProducts(productId, change)) adjustStock(c.product_id, c.quantity, reason, wh, { orderId, allowNegative: true });
 }
 
 /**

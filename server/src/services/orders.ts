@@ -1,7 +1,7 @@
 import { db, getSetting, parseJson, tx } from '../db/index.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
-import { adjustOrderItemStock, deductOrderStock, findProduct, restoreOrderStock } from './stock.js';
+import { deductOrderStock, findProduct, orderLineChanged, releaseOrderStock, reserveOrderStock, restoreOrderStock, transferOrderStock } from './stock.js';
 
 export const ORDER_FIELDS = [
   'external_id',
@@ -161,8 +161,51 @@ function insertItem(orderId: number, it: ItemInput, defaultTax: number) {
   return { id: Number(r.lastInsertRowid), productId };
 }
 
+interface StockSettings {
+  stock_deduct: string;
+  stock_restore_on_cancel: boolean;
+  /** In "deduct on status" mode: reserve the goods until the order reaches that status. */
+  stock_reserve: boolean;
+}
+
+const stockSettings = () => ({ stock_deduct: 'on_create', stock_restore_on_cancel: true, stock_reserve: false, ...getSetting<Partial<StockSettings>>('orders', {}) }) as StockSettings;
+
+/**
+ * Brings the stock of an order (nothing / reserved / deducted) in line with its
+ * state and the "Deduct stock" setting. The single place that decides about
+ * order stock — called after creating, status changes, the bin, merging.
+ */
+export function reconcileOrderStock(orderId: number, user = 'System') {
+  const o = db
+    .prepare('SELECT o.id, o.deleted, o.status_id, o.stock_deducted, o.stock_reserved, s.system_key FROM orders o JOIN order_statuses s ON s.id = o.status_id WHERE o.id = ?')
+    .get(orderId) as { id: number; deleted: number; status_id: number; stock_deducted: number; stock_reserved: number; system_key: string | null } | undefined;
+  if (!o) return;
+  const s = stockSettings();
+  const current = o.stock_deducted ? 'deducted' : o.stock_reserved ? 'reserved' : 'none';
+  let target: 'none' | 'reserved' | 'deducted';
+  if (o.deleted || (o.system_key === 'canceled' && s.stock_restore_on_cancel)) target = 'none';
+  else if (o.system_key === 'canceled' || s.stock_deduct === 'never') target = current;
+  else if (s.stock_deduct === 'on_create') target = 'deducted';
+  else {
+    const at = Number(s.stock_deduct.replace('status:', ''));
+    // Once taken at that status the stock stays taken in the following statuses.
+    target = o.status_id === at || o.stock_deducted ? 'deducted' : s.stock_reserve ? 'reserved' : 'none';
+  }
+  if (target === current) return;
+  tx(() => {
+    if (target === 'deducted') deductOrderStock(orderId);
+    else {
+      if (o.stock_deducted) restoreOrderStock(orderId);
+      else releaseOrderStock(orderId);
+      if (target === 'reserved') reserveOrderStock(orderId);
+    }
+    const msg = { deducted: 'Stock deducted from the warehouse', reserved: 'Stock reserved', none: current === 'deducted' ? 'Stock returned to the warehouse' : 'Stock reservation released' }[target];
+    addHistory(orderId, msg, 'stock', user);
+  });
+}
+
 export function createOrder(input: OrderInput, user = 'System'): number {
-  const settings = getSetting('orders', { stock_deduct: 'on_create', default_tax_rate: 23 } as any);
+  const settings = getSetting('orders', { default_tax_rate: 23 } as any);
   const id = tx(() => {
     const statusId = input.status_id ?? statusIdByKey('new');
     const data: Record<string, any> = {};
@@ -182,7 +225,7 @@ export function createOrder(input: OrderInput, user = 'System'): number {
     for (const it of input.items ?? []) insertItem(orderId, it, settings.default_tax_rate ?? 23);
     const src = input.source && input.source !== 'manual' ? input.source : null;
     addHistory(orderId, src ? `Order downloaded from ${src}` : 'Order created', 'create', user);
-    if (settings.stock_deduct === 'on_create') deductOrderStock(orderId);
+    reconcileOrderStock(orderId, user);
     return orderId;
   });
   emit('order_created', { orderId: id, user });
@@ -225,14 +268,7 @@ export function changeStatus(id: number, statusId: number, user = 'System', meta
       id,
     );
     addHistory(id, `Status changed: ${from?.name ?? '?'} → ${st.name}`, 'status', user);
-    const settings = getSetting('orders', { stock_restore_on_cancel: true, stock_deduct: 'on_create' } as any);
-    if (st.system_key === 'canceled' && settings.stock_restore_on_cancel) restoreOrderStock(id);
-    else if (settings.stock_deduct === `status:${statusId}`) deductOrderStock(id);
-    else if (o.stock_deducted === 0 && settings.stock_deduct === 'on_create' && st.system_key !== 'canceled') {
-      // Re-deduct when an order is brought back from "canceled".
-      const prev = db.prepare('SELECT system_key FROM order_statuses WHERE id = ?').get(o.status_id) as { system_key: string | null };
-      if (prev?.system_key === 'canceled') deductOrderStock(id);
-    }
+    reconcileOrderStock(id, user);
   });
   emit('status_changed', { orderId: id, user, fromStatusId: o.status_id, toStatusId: statusId, ...meta });
   return true;
@@ -253,11 +289,11 @@ export function setPayment(id: number, amount: number, user = 'System', date?: s
 }
 
 export function addItem(orderId: number, it: ItemInput, user = 'System') {
-  const o = getOrder(orderId);
+  getOrder(orderId);
   const settings = getSetting('orders', { default_tax_rate: 23 } as any);
   const res = tx(() => {
     const r = insertItem(orderId, it, settings.default_tax_rate ?? 23);
-    if (o.stock_deducted && r.productId) adjustOrderItemStock(orderId, r.productId, -it.quantity, 'order');
+    if (r.productId) orderLineChanged(orderId, r.productId, it.quantity, 'order');
     addHistory(orderId, `Product added: ${it.quantity}x ${it.name}`, 'items', user);
     return r.id;
   });
@@ -265,20 +301,21 @@ export function addItem(orderId: number, it: ItemInput, user = 'System') {
 }
 
 export function updateItem(orderId: number, itemId: number, patch: Partial<ItemInput>, user = 'System') {
-  const o = getOrder(orderId);
+  getOrder(orderId);
   const it = db.prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ?').get(itemId, orderId) as any;
   if (!it) throw notFound('Item not found');
+  if (patch.product_id && !db.prepare('SELECT 1 FROM products WHERE id = ?').get(patch.product_id)) throw new HttpError(400, 'Product not found');
   const fields = ['product_id', 'name', 'sku', 'ean', 'quantity', 'price', 'tax_rate', 'weight', 'location', 'attributes', 'auction_id'] as const;
   const data: Record<string, any> = {};
   for (const f of fields) if (patch[f] !== undefined) data[f] = patch[f];
   if (!Object.keys(data).length) return;
   tx(() => {
-    if (o.stock_deducted) {
-      // Give back the old quantity and take the new one.
-      if (it.product_id) adjustOrderItemStock(orderId, it.product_id, it.quantity, 'order_edit');
-      const newPid = data.product_id !== undefined ? data.product_id : it.product_id;
-      const newQty = data.quantity ?? it.quantity;
-      if (newPid) adjustOrderItemStock(orderId, newPid, -newQty, 'order_edit');
+    // Give back the old quantity and take the new one (stock or reservation).
+    const newPid = data.product_id !== undefined ? data.product_id : it.product_id;
+    const newQty = data.quantity ?? it.quantity;
+    if (newPid !== it.product_id || newQty !== it.quantity) {
+      if (it.product_id) orderLineChanged(orderId, it.product_id, -it.quantity);
+      if (newPid) orderLineChanged(orderId, newPid, newQty);
     }
     db.prepare(`UPDATE order_items SET ${Object.keys(data).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(
       ...Object.values(data),
@@ -289,11 +326,11 @@ export function updateItem(orderId: number, itemId: number, patch: Partial<ItemI
 }
 
 export function deleteItem(orderId: number, itemId: number, user = 'System') {
-  const o = getOrder(orderId);
+  getOrder(orderId);
   const it = db.prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ?').get(itemId, orderId) as any;
   if (!it) throw notFound('Item not found');
   tx(() => {
-    if (o.stock_deducted && it.product_id) adjustOrderItemStock(orderId, it.product_id, it.quantity, 'order_edit');
+    if (it.product_id) orderLineChanged(orderId, it.product_id, -it.quantity);
     db.prepare('DELETE FROM order_items WHERE id = ?').run(itemId);
     addHistory(orderId, `Product removed: ${it.quantity}x ${it.name}`, 'items', user);
   });
@@ -307,20 +344,22 @@ export function deleteOrder(id: number, user = 'System') {
     db.prepare('DELETE FROM orders WHERE id = ?').run(id);
     return 'purged';
   }
-  db.prepare(`UPDATE orders SET deleted = 1, updated_at = datetime('now') WHERE id = ?`).run(id);
-  restoreOrderStock(id);
-  addHistory(id, 'Order moved to bin', 'delete', user);
+  tx(() => {
+    db.prepare(`UPDATE orders SET deleted = 1, updated_at = datetime('now') WHERE id = ?`).run(id);
+    addHistory(id, 'Order moved to bin', 'delete', user);
+    reconcileOrderStock(id, user);
+  });
   return 'binned';
 }
 
 export function restoreOrder(id: number, user = 'System') {
   getOrder(id);
-  db.prepare(`UPDATE orders SET deleted = 0, archived = 0, updated_at = datetime('now') WHERE id = ?`).run(id);
-  addHistory(id, 'Order restored', 'edit', user);
-  const settings = getSetting('orders', { stock_deduct: 'on_create' } as any);
-  const st = db.prepare('SELECT s.system_key FROM orders o JOIN order_statuses s ON s.id = o.status_id WHERE o.id = ?').get(id) as { system_key: string | null };
-  // A canceled order keeps its stock returned.
-  if (settings.stock_deduct === 'on_create' && st?.system_key !== 'canceled') deductOrderStock(id);
+  tx(() => {
+    db.prepare(`UPDATE orders SET deleted = 0, archived = 0, updated_at = datetime('now') WHERE id = ?`).run(id);
+    addHistory(id, 'Order restored', 'edit', user);
+    // A canceled order keeps its stock returned.
+    reconcileOrderStock(id, user);
+  });
 }
 
 export function setArchived(id: number, archived: boolean, user = 'System') {
@@ -329,49 +368,98 @@ export function setArchived(id: number, archived: boolean, user = 'System') {
   addHistory(id, archived ? 'Order archived' : 'Order removed from archive', 'edit', user);
 }
 
-/** Merges orders into the first one: items are moved, the rest go to the bin. */
+/**
+ * Merges orders into the oldest one: products, delivery cost and payments are
+ * added up, the other orders go to the bin. Stock is taken back from the merged
+ * orders and settled again on the result.
+ */
 export function mergeOrders(ids: number[], user = 'System'): number {
-  if (ids.length < 2) throw new HttpError(400, 'Select at least two orders');
-  const [targetId, ...rest] = [...ids].sort((a, b) => a - b);
+  const unique = [...new Set(ids.map(Number))].sort((a, b) => a - b);
+  if (unique.length < 2) throw new HttpError(400, 'Select at least two orders');
+  const [targetId, ...rest] = unique;
   tx(() => {
     const target = getOrder(targetId);
-    let paid = target.paid_amount;
-    for (const id of rest) {
-      const o = getOrder(id);
+    const all = [target, ...rest.map(getOrder)];
+    for (const o of all) {
+      if (o.deleted) throw new HttpError(400, `Order ${o.id} is in the bin`);
       if (o.currency !== target.currency) throw new HttpError(400, 'Orders have different currencies');
-      if (o.stock_deducted !== target.stock_deducted) {
-        if (target.stock_deducted) deductOrderStock(id);
-        else restoreOrderStock(id);
-      }
-      db.prepare('UPDATE order_items SET order_id = ? WHERE order_id = ?').run(targetId, id);
-      paid += o.paid_amount;
-      db.prepare(`UPDATE orders SET deleted = 1, stock_deducted = 0, updated_at = datetime('now') WHERE id = ?`).run(id);
-      addHistory(id, `Order merged into ${targetId}`, 'merge', user);
-      addHistory(targetId, `Order ${id} merged into this order`, 'merge', user);
+      if ((o.warehouse_id ?? null) !== (target.warehouse_id ?? null)) throw new HttpError(400, 'Orders are fulfilled from different warehouses');
+      if (db.prepare(`SELECT 1 FROM invoices WHERE order_id = ? AND type != 'proforma'`).get(o.id)) throw new HttpError(400, `Order ${o.id} already has an invoice or receipt`);
     }
-    db.prepare('UPDATE orders SET paid_amount = ? WHERE id = ?').run(round2(paid), targetId);
+    // Settle stock from scratch: give everything back, move the lines, take it again.
+    for (const o of all) {
+      if (o.stock_deducted) restoreOrderStock(o.id);
+      else releaseOrderStock(o.id);
+    }
+    let paid = target.paid_amount;
+    let delivery = target.delivery_price;
+    for (const o of all.slice(1)) {
+      db.prepare('UPDATE order_items SET order_id = ? WHERE order_id = ?').run(targetId, o.id);
+      paid += o.paid_amount;
+      delivery += o.delivery_price;
+      db.prepare(`UPDATE orders SET deleted = 1, paid_amount = 0, delivery_price = 0, updated_at = datetime('now') WHERE id = ?`).run(o.id);
+      addHistory(o.id, `Order merged into ${targetId}`, 'merge', user);
+      addHistory(targetId, `Order ${o.id} merged into this order`, 'merge', user);
+    }
+    db.prepare(`UPDATE orders SET paid_amount = ?, delivery_price = ?, updated_at = datetime('now') WHERE id = ?`).run(round2(paid), round2(delivery), targetId);
+    reconcileOrderStock(targetId, user);
   });
   return targetId;
 }
 
-/** Splits selected items into a new order. */
-export function splitOrder(id: number, itemIds: number[], user = 'System'): number {
+/**
+ * Splits products into a new order. Each entry moves the whole line or only
+ * `quantity` units of it. Payment above the remaining total goes with the new order.
+ */
+export function splitOrder(id: number, lines: (number | { id: number; quantity?: number })[], user = 'System'): number {
   const o = getOrder(id);
-  const items = db.prepare('SELECT id FROM order_items WHERE order_id = ?').all(id) as { id: number }[];
-  const moving = items.filter((i) => itemIds.includes(i.id));
-  if (!moving.length || moving.length === items.length) throw new HttpError(400, 'Select some (not all) products to split');
+  if (o.deleted) throw new HttpError(400, 'The order is in the bin');
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(id) as any[];
+  const wanted = new Map<number, number>();
+  for (const l of lines) {
+    const lid = typeof l === 'number' ? l : l.id;
+    const it = items.find((i) => i.id === lid);
+    if (!it) throw new HttpError(400, `Item ${lid} is not part of the order`);
+    const q = typeof l === 'number' || l.quantity === undefined ? it.quantity : l.quantity;
+    if (!(q > 0) || q > it.quantity) throw new HttpError(400, `Wrong quantity to split for "${it.name}"`);
+    wanted.set(lid, q);
+  }
+  const remaining = items.reduce((sum, i) => sum + i.quantity - (wanted.get(i.id) ?? 0), 0);
+  if (!wanted.size || remaining <= 0) throw new HttpError(400, 'Select some (not all) products to split');
   return tx(() => {
     const copy: Record<string, any> = {};
     for (const f of ORDER_FIELDS) if (f !== 'external_id') copy[f] = o[f];
     copy.paid_amount = 0;
+    copy.payment_date = null;
     copy.delivery_price = 0;
-    const cols = ['status_id', 'stock_deducted', ...Object.keys(copy)];
+    // The stock state is kept: lines move between orders of the same warehouse.
+    const cols = ['status_id', 'stock_deducted', 'stock_reserved', ...Object.keys(copy)];
     const r = db
       .prepare(`INSERT INTO orders (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
-      .run(o.status_id, o.stock_deducted, ...Object.values(copy));
+      .run(o.status_id, o.stock_deducted, o.stock_reserved, ...Object.values(copy));
     const newId = Number(r.lastInsertRowid);
-    const upd = db.prepare('UPDATE order_items SET order_id = ? WHERE id = ?');
-    for (const m of moving) upd.run(newId, m.id);
+    for (const [lid, q] of wanted) {
+      const it = items.find((i) => i.id === lid);
+      if (q === it.quantity) db.prepare('UPDATE order_items SET order_id = ? WHERE id = ?').run(newId, lid);
+      else {
+        db.prepare('UPDATE order_items SET quantity = quantity - ? WHERE id = ?').run(q, lid);
+        const { id: _id, order_id: _o, ...rest } = it;
+        const cols2 = Object.keys(rest);
+        db.prepare(`INSERT INTO order_items (order_id, ${cols2.join(', ')}) VALUES (?, ${cols2.map(() => '?').join(', ')})`).run(newId, ...cols2.map((c) => (c === 'quantity' ? q : rest[c])));
+      }
+    }
+    // Taken stock follows the moved lines so that cancelling either order returns the right goods.
+    if (o.stock_deducted) {
+      for (const [lid, q] of wanted) {
+        const it = items.find((i) => i.id === lid);
+        if (it.product_id) transferOrderStock(id, newId, it.product_id, q);
+      }
+    }
+    const left = orderTotal(id);
+    if (o.paid_amount > left + 0.001) {
+      db.prepare('UPDATE orders SET paid_amount = ? WHERE id = ?').run(left, id);
+      db.prepare('UPDATE orders SET paid_amount = ?, payment_date = ? WHERE id = ?').run(round2(o.paid_amount - left), o.payment_date, newId);
+    }
     addHistory(id, `Products moved to new order ${newId}`, 'split', user);
     addHistory(newId, `Order created by splitting order ${id}`, 'split', user);
     return newId;
@@ -387,7 +475,8 @@ export function duplicateOrder(id: number, user = 'System'): number {
   input.paid_amount = 0;
   input.payment_date = null;
   input.date_add = undefined;
-  input.items = items.map((i) => ({ ...i, product_id: i.product_id }));
+  // Marketplace references belong to the original order only.
+  input.items = items.map((i) => ({ ...i, product_id: i.product_id, auction_id: '', external_line_id: '' }));
   const newId = createOrder(input, user);
   addHistory(newId, `Order duplicated from ${id}`, 'create', user);
   return newId;

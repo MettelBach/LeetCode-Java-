@@ -219,8 +219,14 @@ ordersRouter.post('/:id/duplicate', (req, res) => {
 });
 
 ordersRouter.post('/:id/split', (req, res) => {
-  const b = z.object({ item_ids: z.array(z.number().int()).min(1) }).parse(req.body);
-  res.json({ id: splitOrder(idParam(req), b.item_ids, userName(req)) });
+  const b = z
+    .object({
+      item_ids: z.array(z.number().int()).optional(),
+      items: z.array(z.object({ id: z.number().int(), quantity: z.number().positive().optional() })).optional(),
+    })
+    .refine((v) => (v.item_ids?.length ?? 0) + (v.items?.length ?? 0) > 0, 'Select products to split')
+    .parse(req.body);
+  res.json({ id: splitOrder(idParam(req), [...(b.item_ids ?? []), ...(b.items ?? [])], userName(req)) });
 });
 
 ordersRouter.post('/:id/note', (req, res) => {

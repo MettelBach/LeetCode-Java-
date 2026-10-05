@@ -1,8 +1,8 @@
 import { db, parseJson, tx } from '../db/index.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
-import { addHistory, getOrder } from './orders.js';
-import { adjustOrderItemStock, adjustStock } from './stock.js';
+import { addHistory, getOrder, orderTotal } from './orders.js';
+import { adjustStock, returnOrderLineStock } from './stock.js';
 
 export interface ReturnItem {
   order_item_id?: number;
@@ -32,6 +32,36 @@ function defaultReturnStatus() {
   return (db.prepare(`SELECT id FROM return_statuses ORDER BY system_key = 'new' DESC, sort LIMIT 1`).get() as { id: number }).id;
 }
 
+/**
+ * Checks returned products against the order: only its own lines, not more
+ * than ordered minus earlier returns; product links come from the order lines.
+ */
+function checkReturnItems(orderId: number, items: ReturnItem[], exceptReturnId = 0): ReturnItem[] {
+  const lines = db.prepare('SELECT id, product_id, name, sku, quantity, price FROM order_items WHERE order_id = ?').all(orderId) as any[];
+  const returned = new Map<number, number>();
+  for (const r of db.prepare('SELECT items FROM returns WHERE order_id = ? AND id != ?').all(orderId, exceptReturnId) as { items: string }[]) {
+    for (const it of parseJson<ReturnItem[]>(r.items, [])) if (it.order_item_id) returned.set(it.order_item_id, (returned.get(it.order_item_id) ?? 0) + it.quantity);
+  }
+  const asked = new Map<number, number>();
+  return items.map((it) => {
+    const line = it.order_item_id
+      ? lines.find((l) => l.id === it.order_item_id)
+      : lines.find((l) => (it.product_id && l.product_id === it.product_id) || (it.sku && l.sku === it.sku));
+    if (!line) throw new HttpError(400, `"${it.name}" is not a product of this order`);
+    asked.set(line.id, (asked.get(line.id) ?? 0) + it.quantity);
+    const left = line.quantity - (returned.get(line.id) ?? 0);
+    if (asked.get(line.id)! > left) throw new HttpError(400, `Only ${Math.max(0, left)} × "${line.name}" can still be returned`);
+    return { ...it, order_item_id: line.id, product_id: line.product_id, name: it.name || line.name, sku: it.sku || line.sku };
+  });
+}
+
+/** Refund cannot exceed what the order is worth minus earlier refunds. */
+function checkRefund(orderId: number, refund: number, exceptReturnId = 0) {
+  const total = orderTotal(orderId);
+  const earlier = (db.prepare('SELECT COALESCE(SUM(refund_amount), 0) s FROM returns WHERE order_id = ? AND id != ?').get(orderId, exceptReturnId) as { s: number }).s;
+  if (refund > round2(total - earlier) + 0.001) throw new HttpError(400, `The refund exceeds the order value (${round2(Math.max(0, total - earlier)).toFixed(2)} left to refund)`);
+}
+
 export function createReturn(input: ReturnInput, user = 'System'): number {
   let buyerName = input.buyer_name ?? '';
   let buyerEmail = input.buyer_email ?? '';
@@ -39,25 +69,32 @@ export function createReturn(input: ReturnInput, user = 'System'): number {
   let items = input.items ?? [];
   if (input.order_id) {
     const o = getOrder(input.order_id);
+    if (o.deleted) throw new HttpError(400, 'The order is in the bin');
     buyerName ||= o.delivery_fullname;
     buyerEmail ||= o.email;
     currency = o.currency;
     if (!items.length) {
-      items = (db.prepare('SELECT id, product_id, name, sku, quantity, price FROM order_items WHERE order_id = ?').all(input.order_id) as any[]).map(
-        (i) => ({ order_item_id: i.id, product_id: i.product_id, name: i.name, sku: i.sku, quantity: i.quantity, price: i.price }),
-      );
-    } else {
-      // Fill product links from order items.
-      items = items.map((it) => {
-        if (it.order_item_id && it.product_id === undefined) {
-          const oi = db.prepare('SELECT product_id FROM order_items WHERE id = ? AND order_id = ?').get(it.order_item_id, input.order_id) as any;
-          return { ...it, product_id: oi?.product_id ?? null };
-        }
-        return it;
-      });
+      // Everything that was not returned yet.
+      items = (db.prepare('SELECT id, product_id, name, sku, quantity, price FROM order_items WHERE order_id = ?').all(input.order_id) as any[]).map((i) => ({
+        order_item_id: i.id,
+        product_id: i.product_id,
+        name: i.name,
+        sku: i.sku,
+        quantity: i.quantity,
+        price: i.price,
+      }));
+      const done = new Map<number, number>();
+      for (const r of db.prepare('SELECT items FROM returns WHERE order_id = ?').all(input.order_id) as { items: string }[]) {
+        for (const it of parseJson<ReturnItem[]>(r.items, [])) if (it.order_item_id) done.set(it.order_item_id, (done.get(it.order_item_id) ?? 0) + it.quantity);
+      }
+      items = items.map((i) => ({ ...i, quantity: i.quantity - (done.get(i.order_item_id!) ?? 0) })).filter((i) => i.quantity > 0);
+      if (!items.length) throw new HttpError(400, 'All products of this order have already been returned');
     }
+    items = checkReturnItems(input.order_id, items);
   }
   const refund = input.refund_amount ?? round2(items.reduce((s, i) => s + i.price * i.quantity, 0));
+  if (refund < 0) throw new HttpError(400, 'The refund cannot be negative');
+  if (input.order_id) checkRefund(input.order_id, refund);
   const id = Number(
     db
       .prepare(
@@ -98,7 +135,14 @@ export function updateReturn(id: number, patch: Partial<ReturnInput> & { refunde
   const fields = ['status_id', 'reason', 'refund_amount', 'bank_account', 'tracking_number', 'notes', 'refunded'] as const;
   const data: Record<string, any> = {};
   for (const f of fields) if (patch[f] !== undefined) data[f] = typeof patch[f] === 'boolean' ? (patch[f] ? 1 : 0) : patch[f];
-  if (patch.items) data.items = JSON.stringify(patch.items);
+  if (patch.items) {
+    if (r.stock_returned) throw new HttpError(409, 'Products were already returned to stock — the list cannot be changed');
+    data.items = JSON.stringify(r.order_id ? checkReturnItems(r.order_id, patch.items, id) : patch.items);
+  }
+  if (r.order_id && data.refund_amount !== undefined) {
+    if (data.refund_amount < 0) throw new HttpError(400, 'The refund cannot be negative');
+    checkRefund(r.order_id, data.refund_amount, id);
+  }
   if (data.status_id && !db.prepare('SELECT 1 FROM return_statuses WHERE id = ?').get(data.status_id)) throw new HttpError(400, 'Unknown return status');
   if (!Object.keys(data).length) return;
   db.prepare(`UPDATE returns SET ${Object.keys(data).map((k) => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(
@@ -116,13 +160,25 @@ export function updateReturn(id: number, patch: Partial<ReturnInput> & { refunde
 export function returnToStock(id: number, user = 'System') {
   const r = getReturn(id);
   if (r.stock_returned) throw new HttpError(409, 'Stock already returned');
+  let units = 0;
   tx(() => {
     for (const it of r.items as ReturnItem[]) {
       if (!it.product_id) continue;
-      if (r.order_id) adjustOrderItemStock(r.order_id, it.product_id, it.quantity, 'return');
-      else adjustStock(it.product_id, it.quantity, 'return', null, { user });
+      if (r.order_id) units += returnOrderLineStock(r.order_id, it.product_id, it.quantity, user);
+      else {
+        adjustStock(it.product_id, it.quantity, 'return', null, { user });
+        units += it.quantity;
+      }
     }
     db.prepare('UPDATE returns SET stock_returned = 1 WHERE id = ?').run(id);
   });
-  if (r.order_id) addHistory(r.order_id, `Return #${id}: products returned to stock`, 'return', user);
+  if (r.order_id) {
+    addHistory(
+      r.order_id,
+      units ? `Return #${id}: products returned to stock` : `Return #${id}: nothing returned to stock — the order did not take stock`,
+      'return',
+      user,
+    );
+  }
+  return units;
 }
