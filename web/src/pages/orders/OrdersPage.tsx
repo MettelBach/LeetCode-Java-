@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDownWideNarrow,
   Banknote,
@@ -27,6 +27,7 @@ import { useEmailTemplates, useIntegrations, useInvalidateOrders, useInvoiceSeri
 import { flag, fmtDateTime, money } from '../../format';
 import { useT } from '../../i18n';
 import { StatusColumn } from './StatusColumn';
+import { SHIP_STATUS_LABEL } from './historyText';
 
 const FILTER_KEYS = [
   'search',
@@ -47,6 +48,20 @@ const FILTER_KEYS = [
   'invoice',
   'shipment',
   'star',
+  'status_date_from',
+  'status_date_to',
+  'paid_from',
+  'paid_to',
+  'status_days',
+  'label',
+  'shipment_status',
+  'warehouse_id',
+  'currency',
+  'has_return',
+  'locked',
+  'unlinked',
+  'receipt',
+  'items_min',
 ] as const;
 
 export default function OrdersPage() {
@@ -251,16 +266,19 @@ export default function OrdersPage() {
                           {o.integration_name ?? (o.source === 'manual' ? t('Other') : o.source)}
                         </div>
                       </td>
-                      <td className="items-cell" style={{ minWidth: 180 }}>
+                      <td className="items-cell" style={{ minWidth: 200 }}>
                         {o.items.slice(0, 4).map((i: any, idx: number) => (
-                          <div key={idx}>
-                            <i>{i.quantity}x</i> {i.name}
-                            {i.attributes ? <span className="text-muted"> ({i.attributes})</span> : null}
+                          <div key={idx} className="item-line">
+                            {i.image ? <img src={i.image} alt="" className="mini-thumb" loading="lazy" /> : <span className="mini-thumb empty" />}
+                            <span>
+                              <i>{i.quantity}x</i> {i.name}
+                              {i.attributes ? <span className="text-muted"> ({i.attributes})</span> : null}
+                            </span>
                           </div>
                         ))}
                         {o.items.length > 4 && <div className="text-muted">+ {o.items.length - 4} …</div>}
                       </td>
-                      <td style={{ maxWidth: 200, fontSize: 13.5 }}>
+                      <td style={{ maxWidth: 170, fontSize: 13.5 }}>
                         {o.payment_method && <div>{o.payment_method}</div>}
                         {o.buyer_comment && (
                           <div className="text-muted" title={o.buyer_comment} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -272,13 +290,37 @@ export default function OrdersPage() {
                       <td className="num">
                         <span className="price">{money(o.total, o.currency)}</span>
                       </td>
-                      <td style={{ minWidth: 200 }}>
-                        <div className="row" style={{ alignItems: 'flex-start', gap: 8 }}>
-                          <div className="grow" style={{ minWidth: 0 }}>
-                            {st && <StatusBadge name={st.short_name || st.name} color={st.color} />}
-                            {o.delivery_method && <div className="date-sub">{o.delivery_method}</div>}
-                          </div>
-                        <span className="ico-row">
+                      <td style={{ minWidth: 150 }}>
+                        <div>
+                          {st && (
+                            <Dropdown
+                              trigger={(_o, toggle) => (
+                                <button className="badge-btn" onClick={toggle} title={t('Change status')}>
+                                  <StatusBadge name={st.short_name || st.name} color={st.color} />
+                                </button>
+                              )}
+                            >
+                              {(close) => (
+                                <>
+                                  <div className="dd-head">{t('Move to status')}</div>
+                                  {statuses.data?.statuses.map((x) => (
+                                    <DdItem
+                                      key={x.id}
+                                      icon={<span className="color-dot" style={{ background: x.color }} />}
+                                      onClick={() => {
+                                        close();
+                                        if (x.id !== o.status_id) run(() => api.post(`/orders/${o.id}/status`, { status_id: x.id }), t('Status changed')).then(invalidate);
+                                      }}
+                                    >
+                                      {x.name}
+                                    </DdItem>
+                                  ))}
+                                </>
+                              )}
+                            </Dropdown>
+                          )}
+                          {o.delivery_method && <div className="date-sub">{o.delivery_method}</div>}
+                        <span className="ico-row" style={{ marginTop: 4 }}>
                           <span className={`ico ${paidFull ? 'green' : o.payment_cod ? 'orange' : ''}`} title={paidFull ? t('Paid') : o.payment_cod ? t('Cash on delivery') : t('Not paid')}>
                             {paidFull ? 'P' : o.payment_cod ? 'C' : 'N'}
                           </span>
@@ -351,6 +393,20 @@ const FILTER_LABELS: Record<string, string> = {
   invoice: 'Invoice',
   shipment: 'Shipment',
   star: 'Starred',
+  status_date_from: 'Status changed from',
+  status_date_to: 'Status changed to',
+  paid_from: 'Paid from',
+  paid_to: 'Paid to',
+  status_days: 'Days in status',
+  label: 'Label',
+  shipment_status: 'Shipment status',
+  warehouse_id: 'Warehouse',
+  currency: 'Currency',
+  has_return: 'Return',
+  locked: 'Locked',
+  unlinked: 'Not linked products',
+  receipt: 'Receipt',
+  items_min: 'Products at least',
 };
 
 function StarToggle({ order, onDone }: { order: any; onDone: () => void }) {
@@ -676,9 +732,15 @@ function OrdersToolbar({
 
 function AdvancedSearch({ initial, onClose, onApply }: { initial: Record<string, string>; onClose: () => void; onApply: (f: Record<string, string>) => void }) {
   const t = useT();
+  const qc = useQueryClient();
+  const run = useAction();
   const integrations = useIntegrations();
+  const warehouses = useQuery({ queryKey: ['warehouses'], queryFn: () => api.get<any[]>('/warehouses'), staleTime: 60_000 });
+  const saved = useQuery({ queryKey: ['order-saved-filters'], queryFn: () => api.get<{ name: string; query: Record<string, string> }[]>('/orders/saved-filters') });
   const [f, setF] = useState<Record<string, string>>(initial);
+  const [saveName, setSaveName] = useState('');
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+  const clean = () => Object.fromEntries(Object.entries(f).filter(([, v]) => v !== ''));
   const inp = (k: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
     <input className="input" value={f[k] ?? ''} onChange={(e) => set(k, e.target.value)} {...props} />
   );
@@ -692,6 +754,14 @@ function AdvancedSearch({ initial, onClose, onApply }: { initial: Record<string,
       ))}
     </select>
   );
+  const yesNo: [string, string][] = [
+    ['1', t('Yes')],
+    ['0', t('No')],
+  ];
+  const storeSaved = async (list: { name: string; query: Record<string, string> }[]) => {
+    const r = await run(() => api.put('/orders/saved-filters', list), t('Saved'));
+    if (r) qc.invalidateQueries({ queryKey: ['order-saved-filters'] });
+  };
   return (
     <Modal
       title={t('Advanced search')}
@@ -702,14 +772,30 @@ function AdvancedSearch({ initial, onClose, onApply }: { initial: Record<string,
           <button className="btn" onClick={() => setF({})}>
             {t('Clear')}
           </button>
-          <button className="btn btn-primary" onClick={() => onApply(Object.fromEntries(Object.entries(f).filter(([, v]) => v !== '')))}>
+          <button className="btn btn-primary" onClick={() => onApply(clean())}>
             <Search size={17} /> {t('Search')}
           </button>
         </>
       }
     >
+      {!!saved.data?.length && (
+        <div className="row wrap mb" style={{ gap: 6 }}>
+          <span className="text-muted text-small">{t('Saved searches')}:</span>
+          {saved.data.map((x, i) => (
+            <span key={i} className="rule-chip" style={{ cursor: 'pointer' }}>
+              <span onClick={() => onApply(x.query)}>{x.name}</span>{' '}
+              <span title={t('Delete')} onClick={() => storeSaved(saved.data!.filter((_, j) => j !== i))}>
+                ×
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="filter-section">{t('Order and buyer')}</div>
       <div className="form-grid">
-        <Field label={t('Order number / text')}>{inp('search', { autoFocus: true })}</Field>
+        <Field label={t('Order number / text')} help={t('Number, marketplace number, buyer, product, tracking or invoice number')}>
+          {inp('search', { autoFocus: true })}
+        </Field>
         <Field label={t('Buyer (name, e-mail, login, phone)')}>{inp('buyer')}</Field>
         <Field label={t('Product (name, SKU, EAN)')}>{inp('product')}</Field>
         <Field label={t('Comment')}>{inp('comment')}</Field>
@@ -722,6 +808,23 @@ function AdvancedSearch({ initial, onClose, onApply }: { initial: Record<string,
           ])}
         </Field>
         <Field label={t('Marketplace account')}>{sel('integration_ids', (integrations.data ?? []).map((i) => [String(i.id), i.name]))}</Field>
+        <Field label={t('Delivery country (code)')}>{inp('country', { maxLength: 2, placeholder: 'PL' })}</Field>
+        <Field label={t('Currency')}>{inp('currency', { maxLength: 3, placeholder: 'PLN' })}</Field>
+        <Field label={t('Warehouse')}>{sel('warehouse_id', (warehouses.data ?? []).map((w) => [String(w.id), w.name]))}</Field>
+        <Field label={t('Starred')}>{sel('star', yesNo)}</Field>
+      </div>
+      <div className="filter-section">{t('Dates')}</div>
+      <div className="form-grid">
+        <Field label={t('Order date from')}>{inp('date_from', { type: 'date' })}</Field>
+        <Field label={t('Order date to')}>{inp('date_to', { type: 'date' })}</Field>
+        <Field label={t('Status changed from')}>{inp('status_date_from', { type: 'date' })}</Field>
+        <Field label={t('Status changed to')}>{inp('status_date_to', { type: 'date' })}</Field>
+        <Field label={t('Paid from')}>{inp('paid_from', { type: 'date' })}</Field>
+        <Field label={t('Paid to')}>{inp('paid_to', { type: 'date' })}</Field>
+        <Field label={t('In the current status for at least (days)')}>{inp('status_days', { inputMode: 'numeric' })}</Field>
+      </div>
+      <div className="filter-section">{t('Payment and value')}</div>
+      <div className="form-grid">
         <Field label={t('Payment status')}>
           {sel('payment', [
             ['paid', t('Paid')],
@@ -730,15 +833,31 @@ function AdvancedSearch({ initial, onClose, onApply }: { initial: Record<string,
             ['overpaid', t('Overpaid')],
           ])}
         </Field>
-        <Field label={t('Cash on delivery')}>
-          {sel('cod', [
-            ['1', t('Yes')],
-            ['0', t('No')],
+        <Field label={t('Cash on delivery')}>{sel('cod', yesNo)}</Field>
+        <Field label={t('Payment method')}>{inp('payment_method')}</Field>
+        <Field label={t('Price from')}>{inp('price_min', { inputMode: 'decimal' })}</Field>
+        <Field label={t('Price to')}>{inp('price_max', { inputMode: 'decimal' })}</Field>
+        <Field label={t('Number of products at least')}>{inp('items_min', { inputMode: 'numeric' })}</Field>
+      </div>
+      <div className="filter-section">{t('Shipping')}</div>
+      <div className="form-grid">
+        <Field label={t('Shipping method')}>{inp('delivery_method')}</Field>
+        <Field label={t('Shipment')}>
+          {sel('shipment', [
+            ['yes', t('Created')],
+            ['no', t('Not created')],
           ])}
         </Field>
-        <Field label={t('Shipping method')}>{inp('delivery_method')}</Field>
-        <Field label={t('Payment method')}>{inp('payment_method')}</Field>
-        <Field label={t('Delivery country (code)')}>{inp('country', { maxLength: 2, placeholder: 'PL' })}</Field>
+        <Field label={t('Label')}>
+          {sel('label', [
+            ['printed', t('Printed')],
+            ['not_printed', t('Not printed')],
+          ])}
+        </Field>
+        <Field label={t('Shipment status')}>{sel('shipment_status', Object.entries(SHIP_STATUS_LABEL).map(([k, v]) => [k, t(v)]))}</Field>
+      </div>
+      <div className="filter-section">{t('Documents and other')}</div>
+      <div className="form-grid">
         <Field label={t('Invoice')}>
           {sel('invoice', [
             ['wanted', t('Customer requests an invoice')],
@@ -746,22 +865,30 @@ function AdvancedSearch({ initial, onClose, onApply }: { initial: Record<string,
             ['not_issued', t('Invoice not issued')],
           ])}
         </Field>
-        <Field label={t('Date from')}>{inp('date_from', { type: 'date' })}</Field>
-        <Field label={t('Date to')}>{inp('date_to', { type: 'date' })}</Field>
-        <Field label={t('Price from')}>{inp('price_min', { inputMode: 'decimal' })}</Field>
-        <Field label={t('Price to')}>{inp('price_max', { inputMode: 'decimal' })}</Field>
-        <Field label={t('Shipment')}>
-          {sel('shipment', [
-            ['yes', t('Created')],
-            ['no', t('Not created')],
+        <Field label={t('Receipt')}>
+          {sel('receipt', [
+            ['issued', t('Receipt issued')],
+            ['not_issued', t('Receipt not issued')],
           ])}
         </Field>
-        <Field label={t('Starred')}>
-          {sel('star', [
-            ['1', t('Yes')],
-            ['0', t('No')],
-          ])}
+        <Field label={t('Return')}>{sel('has_return', yesNo)}</Field>
+        <Field label={t('Locked (document issued or locked manually)')}>{sel('locked', yesNo)}</Field>
+        <Field label=" ">
+          <label className="check-label" style={{ height: 40 }}>
+            <input type="checkbox" checked={f.unlinked === '1'} onChange={(e) => set('unlinked', e.target.checked ? '1' : '')} />
+            {t('Products not linked with the inventory')}
+          </label>
         </Field>
+      </div>
+      <div className="row mt" style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12 }}>
+        <input className="input" style={{ maxWidth: 260 }} placeholder={t('Name of the search')} value={saveName} onChange={(e) => setSaveName(e.target.value)} maxLength={60} />
+        <button
+          className="btn"
+          disabled={!saveName.trim() || !Object.keys(clean()).length}
+          onClick={() => storeSaved([...(saved.data ?? []).filter((x) => x.name !== saveName.trim()), { name: saveName.trim(), query: clean() }]).then(() => setSaveName(''))}
+        >
+          {t('Save search')}
+        </button>
       </div>
     </Modal>
   );

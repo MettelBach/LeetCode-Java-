@@ -23,6 +23,22 @@ export interface OrderFilters {
   product?: string;
   comment?: string;
   ids?: number[];
+  status_date_from?: string;
+  status_date_to?: string;
+  paid_from?: string;
+  paid_to?: string;
+  /** In the current status for at least this many days ("stuck" orders). */
+  status_days?: number;
+  label?: 'printed' | 'not_printed';
+  shipment_status?: string;
+  warehouse_id?: number;
+  currency?: string;
+  has_return?: boolean;
+  locked?: boolean;
+  /** Orders with products not linked to the inventory. */
+  unlinked?: boolean;
+  receipt?: 'issued' | 'not_issued';
+  items_min?: number;
   sort?: string;
   dir?: 'asc' | 'desc';
   page?: number;
@@ -53,6 +69,20 @@ export function filtersFromQuery(query: Record<string, unknown>): OrderFilters {
     product: q.str(query.product),
     comment: q.str(query.comment),
     ids: q.ints(query.ids).slice(0, 1000),
+    status_date_from: q.str(query.status_date_from),
+    status_date_to: q.str(query.status_date_to),
+    paid_from: q.str(query.paid_from),
+    paid_to: q.str(query.paid_to),
+    status_days: q.num(query.status_days),
+    label: q.str(query.label) as OrderFilters['label'],
+    shipment_status: q.str(query.shipment_status),
+    warehouse_id: q.int(query.warehouse_id),
+    currency: q.str(query.currency),
+    has_return: bool(query.has_return),
+    locked: bool(query.locked),
+    unlinked: bool(query.unlinked),
+    receipt: q.str(query.receipt) as OrderFilters['receipt'],
+    items_min: q.num(query.items_min),
     sort: q.str(query.sort),
     dir: query.dir === 'asc' ? 'asc' : 'desc',
     page: Math.max(1, q.int(query.page) ?? 1),
@@ -98,8 +128,9 @@ export function buildWhere(f: OrderFilters): { where: string; params: unknown[] 
     w.push(`(CAST(o.id AS TEXT) = ? OR o.external_id LIKE ? ESCAPE '!' OR o.delivery_fullname LIKE ? ESCAPE '!' OR o.invoice_fullname LIKE ? ESCAPE '!' OR o.invoice_company LIKE ? ESCAPE '!'
       OR o.email LIKE ? ESCAPE '!' OR o.phone LIKE ? ESCAPE '!' OR o.user_login LIKE ? ESCAPE '!' OR o.delivery_city LIKE ? ESCAPE '!' OR o.invoice_nip LIKE ? ESCAPE '!'
       OR EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND (i.name LIKE ? ESCAPE '!' OR i.sku LIKE ? ESCAPE '!' OR i.ean LIKE ? ESCAPE '!'))
-      OR EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.tracking_number LIKE ? ESCAPE '!'))`);
-    p.push(f.search, like, like, like, like, like, like, like, like, like, like, like, like, like);
+      OR EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.tracking_number LIKE ? ESCAPE '!')
+      OR EXISTS (SELECT 1 FROM invoices v WHERE v.order_id = o.id AND v.number LIKE ? ESCAPE '!'))`);
+    p.push(f.search, like, like, like, like, like, like, like, like, like, like, like, like, like, like);
   }
   if (f.buyer) {
     const like = likeContains(String(f.buyer));
@@ -158,6 +189,52 @@ export function buildWhere(f: OrderFilters): { where: string; params: unknown[] 
   if (f.shipment === 'yes') w.push('EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id)');
   if (f.shipment === 'no') w.push('NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id)');
   if (f.star !== undefined) w.push(f.star ? 'o.star > 0' : 'o.star = 0');
+  const day = (v: string, end: boolean) => (v.length === 10 ? `${v} ${end ? '23:59:59' : '00:00:00'}` : v);
+  if (f.status_date_from) {
+    w.push('o.status_changed_at >= ?');
+    p.push(day(f.status_date_from, false));
+  }
+  if (f.status_date_to) {
+    w.push('o.status_changed_at <= ?');
+    p.push(day(f.status_date_to, true));
+  }
+  if (f.paid_from) {
+    w.push('o.payment_date >= ?');
+    p.push(day(f.paid_from, false));
+  }
+  if (f.paid_to) {
+    w.push('o.payment_date <= ?');
+    p.push(day(f.paid_to, true));
+  }
+  if (f.status_days !== undefined && f.status_days > 0) {
+    w.push(`COALESCE(o.status_changed_at, o.date_add) <= datetime('now', ?)`);
+    p.push(`-${Math.round(f.status_days * 24)} hours`);
+  }
+  if (f.label === 'printed') w.push('EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.label_printed = 1)');
+  if (f.label === 'not_printed') w.push('EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id) AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.label_printed = 1)');
+  if (f.shipment_status) {
+    w.push('EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.status = ?)');
+    p.push(f.shipment_status);
+  }
+  if (f.warehouse_id) {
+    w.push('o.warehouse_id = ?');
+    p.push(f.warehouse_id);
+  }
+  if (f.currency) {
+    w.push('o.currency = ?');
+    p.push(f.currency.toUpperCase());
+  }
+  if (f.has_return !== undefined) w.push(`${f.has_return ? '' : 'NOT '}EXISTS (SELECT 1 FROM returns r WHERE r.order_id = o.id)`);
+  if (f.locked !== undefined) {
+    w.push(f.locked ? `(o.locked = 1 OR EXISTS (SELECT 1 FROM invoices v WHERE v.order_id = o.id AND v.type IN ('invoice','receipt')))` : `(o.locked = 0 AND NOT EXISTS (SELECT 1 FROM invoices v WHERE v.order_id = o.id AND v.type IN ('invoice','receipt')))`);
+  }
+  if (f.unlinked) w.push('EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND i.product_id IS NULL AND i.price >= 0)');
+  if (f.receipt === 'issued') w.push(`EXISTS (SELECT 1 FROM invoices v WHERE v.order_id = o.id AND v.type = 'receipt')`);
+  if (f.receipt === 'not_issued') w.push(`NOT EXISTS (SELECT 1 FROM invoices v WHERE v.order_id = o.id AND v.type = 'receipt')`);
+  if (f.items_min !== undefined) {
+    w.push('(SELECT COALESCE(SUM(quantity), 0) FROM order_items i WHERE i.order_id = o.id) >= ?');
+    p.push(f.items_min);
+  }
   return { where: w.join(' AND '), params: p };
 }
 

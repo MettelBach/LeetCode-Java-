@@ -2409,3 +2409,37 @@ button.status-row.active {
   border-color: #c9dcfb;
   color: #1f4f99;
 }
+.item-line {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-bottom: 3px;
+}
+.mini-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--border-light);
+  flex-shrink: 0;
+  background: #f4f5f7;
+}
+.mini-thumb.empty {
+  display: inline-block;
+}
+.badge-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+.filter-section {
+  font-weight: 600;
+  color: #2f343a;
+  margin: 14px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+.filter-section:first-of-type {
+  margin-top: 0;
+}

@@ -152,6 +152,38 @@ export async function syncOrders(id: number) {
   }
 }
 
+/**
+ * First import of several (demo) accounts at once: orders of all accounts are
+ * created in date order, so the order list mixes marketplaces like a real store.
+ */
+export async function importInitialOrdersMerged(ids: number[]) {
+  const all: { id: number; name: string; status: number; warehouse?: number; mo: any }[] = [];
+  for (const id of ids) {
+    const integration = loadIntegration(id);
+    const days = Number(integration.settings.import_days ?? 7);
+    const since = new Date(Date.now() - days * 86400_000).toISOString().replace('T', ' ').slice(0, 19);
+    const started = new Date(Date.now() - 2 * 60_000).toISOString().replace('T', ' ').slice(0, 19);
+    for (const mo of await connectorFor(integration).fetchOrders(since)) {
+      if (mo.importable === false || mo.canceled) continue;
+      all.push({
+        id,
+        name: integration.name,
+        status: integration.settings.import_status_id ?? statusIdByKey('new'),
+        warehouse: integration.settings.warehouse_id ? Number(integration.settings.warehouse_id) : undefined,
+        mo,
+      });
+    }
+    saveState(id, { orders_cursor: started });
+    db.prepare(`UPDATE integrations SET last_sync_at = datetime('now'), last_error = NULL WHERE id = ?`).run(id);
+  }
+  all.sort((a, b) => String(a.mo.date_add).localeCompare(String(b.mo.date_add)));
+  for (const x of all) {
+    const { canceled: _c, importable: _i, ...input } = x.mo;
+    createOrder({ ...input, integration_id: x.id, status_id: x.status, warehouse_id: x.warehouse }, x.name);
+  }
+  return all.length;
+}
+
 /** Downloads the list of offers and links them with inventory products. */
 export async function syncOffers(id: number) {
   const integration = loadIntegration(id);

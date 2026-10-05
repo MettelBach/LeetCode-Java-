@@ -1,6 +1,6 @@
 import { Router, type Response } from 'express';
 import { z } from 'zod';
-import { db } from '../db/index.js';
+import { db, getSetting, setSetting } from '../db/index.js';
 import { isValidDateTime } from '../lib/dates.js';
 import { HttpError, idParam } from '../lib/http.js';
 import { runRulesFor } from '../services/automation.js';
@@ -148,6 +148,17 @@ export function sendPdf(res: Response, buf: Buffer, filename: string) {
   res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/[^\w.-]/g, '_')}"`);
   res.send(buf);
 }
+
+/** Saved searches of the order list ("Zapisane wyszukiwania"), shared by the account's users. */
+ordersRouter.get('/saved-filters', (_req, res) => {
+  res.json(getSetting<{ name: string; query: Record<string, string> }[]>('order_saved_filters', []));
+});
+
+ordersRouter.put('/saved-filters', (req, res) => {
+  const list = z.array(z.object({ name: z.string().min(1).max(60), query: z.record(z.string(), z.string().max(500)) })).max(50).parse(req.body);
+  setSetting('order_saved_filters', list);
+  res.json({ ok: true });
+});
 
 ordersRouter.get('/:id', (req, res) => {
   const id = idParam(req);

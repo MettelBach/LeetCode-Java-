@@ -227,4 +227,16 @@ describe('Order stock logic', () => {
     expect((await api('POST', '/orders', { status_id: 99999 })).status).toBe(400);
     expect((await api('POST', '/orders/99999/note', { message: 'x' })).status).toBe(404);
   });
+
+  it('order filters: unlinked products, lock, return, days in status, saved searches', async () => {
+    const free = await order([{ name: 'Bez powiązania', quantity: 1, price: 10 }]);
+    const ids = async (qs: string) => (await api('GET', '/orders?per_page=500&' + qs)).data.rows.map((r: any) => r.id);
+    expect(await ids('unlinked=1')).toContain(free);
+    expect(await ids('locked=1')).not.toContain(free);
+    expect(await ids('has_return=1')).not.toContain(free);
+    expect(await ids('status_days=3')).not.toContain(free);
+    expect((await api('GET', '/orders?label=printed&shipment_status=delivered&currency=PLN&paid_from=2026-01-01')).status).toBe(200);
+    await api('PUT', '/orders/saved-filters', [{ name: 'Bez powiązań', query: { unlinked: '1' } }]);
+    expect((await api('GET', '/orders/saved-filters')).data[0].name).toBe('Bez powiązań');
+  });
 });

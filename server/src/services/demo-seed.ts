@@ -1,6 +1,6 @@
 import { db, setSetting, getSetting } from '../db/index.js';
 import { DEMO_PRODUCTS } from '../integrations/demo-data.js';
-import { syncOffers, syncOrders } from '../integrations/sync.js';
+import { importInitialOrdersMerged, syncOffers } from '../integrations/sync.js';
 import { changeStatus, statusIdByKey } from './orders.js';
 import { createReturn } from './returns.js';
 import { createShipment } from './shipments.js';
@@ -104,10 +104,8 @@ export async function seedDemo() {
       void paid;
     }
   }
-  for (const id of ids) {
-    await syncOffers(id).catch(() => undefined);
-    await syncOrders(id).catch(() => undefined);
-  }
+  for (const id of ids) await syncOffers(id).catch(() => undefined);
+  if (ids.length) await importInitialOrdersMerged(ids).catch((e) => console.error('[demo] import failed', e));
   if (ids.length) shapeDemoOrders();
 }
 
