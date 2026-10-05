@@ -4,7 +4,7 @@ import { syncOffers, syncOrders } from '../integrations/sync.js';
 import { changeStatus, statusIdByKey } from './orders.js';
 import { createReturn } from './returns.js';
 import { createShipment } from './shipments.js';
-import { adjustStock } from './stock.js';
+import { adjustStock, defaultCatalogId, defaultPriceGroupId } from './stock.js';
 
 /** Fills an empty account with sample products, demo marketplace accounts and rules. */
 export async function seedDemo() {
@@ -12,19 +12,21 @@ export async function seedDemo() {
   if (has === 0) {
     const cats = new Map<string, number>();
     const mans = new Map<string, number>();
+    const catalogId = defaultCatalogId();
     for (const p of DEMO_PRODUCTS) {
-      if (!cats.has(p.category)) cats.set(p.category, Number(db.prepare('INSERT INTO categories (name) VALUES (?)').run(p.category).lastInsertRowid));
+      if (!cats.has(p.category)) cats.set(p.category, Number(db.prepare('INSERT INTO categories (name, catalog_id) VALUES (?, ?)').run(p.category, catalogId).lastInsertRowid));
       if (!mans.has(p.manufacturer)) mans.set(p.manufacturer, Number(db.prepare('INSERT INTO manufacturers (name) VALUES (?)').run(p.manufacturer).lastInsertRowid));
       const id = Number(
         db
           .prepare(
-            `INSERT INTO products (sku, ean, name, description, price, purchase_price, tax_rate, weight, location, category_id, manufacturer_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO products (catalog_id, sku, ean, name, description, price, purchase_price, avg_cost, tax_rate, weight, location, category_id, manufacturer_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(p.sku, p.ean, p.name, `${p.name} — opis produktu.`, p.price, p.purchase, p.category === 'Książki' ? 5 : 23, p.weight, p.location, cats.get(p.category), mans.get(p.manufacturer))
+          .run(catalogId, p.sku, p.ean, p.name, `${p.name} — opis produktu.`, p.price, p.purchase, p.purchase, p.category === 'Książki' ? 5 : 23, p.weight, p.location, cats.get(p.category), mans.get(p.manufacturer))
           .lastInsertRowid,
       );
-      if (p.stock) adjustStock(id, p.stock, 'initial stock');
+      db.prepare('INSERT INTO product_prices (product_id, price_group_id, price) VALUES (?, ?, ?)').run(id, defaultPriceGroupId(), p.price);
+      if (p.stock) adjustStock(id, p.stock, 'BO — stan początkowy');
     }
   }
   const company = getSetting<any>('company', {});

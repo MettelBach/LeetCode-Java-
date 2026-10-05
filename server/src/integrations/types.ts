@@ -38,6 +38,8 @@ export interface IntegrationSettings {
   stock_warehouse_ids?: number[];
   /** Catalog used for automatic linking and listing. */
   catalog_id?: number | null;
+  /** Price group whose prices are sent to this marketplace (default group when empty). */
+  price_group_id?: number | null;
   /** Marketplace price = inventory price × (1 + markup %) + add, then rounding. */
   price_markup_percent?: number;
   price_add?: number;

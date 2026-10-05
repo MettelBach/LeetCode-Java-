@@ -10,6 +10,7 @@ import {
   DEFAULT_SETTINGS,
   loadIntegration,
   marketplacePrice,
+  offerBasePrice,
   marketplaceStock,
   offerStock,
   pushOffers,
@@ -22,6 +23,7 @@ import {
 import { STATUS_CODES } from '../integrations/types.js';
 import { planById } from '../services/platform.js';
 import { requireAdmin, userName } from './auth.js';
+import { adjustStock, catalogWarehouseId, defaultCatalogId, defaultPriceGroupId } from '../services/stock.js';
 
 export const integrationsRouter = Router();
 
@@ -97,6 +99,7 @@ const settingsSchema = z
     warehouse_id: z.number().int().nullable(),
     stock_warehouse_ids: z.array(z.number().int()),
     catalog_id: z.number().int().nullable(),
+    price_group_id: z.number().int().nullable(),
     price_markup_percent: z.number().min(-90).max(500),
     price_add: z.number().min(-10000).max(10000),
     price_rounding: z.enum(['none', '99', 'int']),
@@ -304,27 +307,33 @@ offersRouter.put('/:id', (req, res) => {
 
 /** Creates inventory products from unlinked offers (BaseLinker "import offers to inventory"). */
 offersRouter.post('/to-inventory', (req, res) => {
-  const b = z.object({ ids: z.array(z.number().int()).min(1).max(5000) }).parse(req.body);
+  const b = z.object({ ids: z.array(z.number().int()).min(1).max(5000), catalog_id: z.number().int().optional() }).parse(req.body);
   let created = 0;
+  let linked = 0;
   db.transaction(() => {
     for (const id of b.ids) {
       const o = db.prepare('SELECT * FROM offers WHERE id = ? AND product_id IS NULL').get(id) as any;
       if (!o) continue;
-      const existing = o.sku ? (db.prepare('SELECT id FROM products WHERE sku = ?').get(o.sku) as any) : null;
+      const settings = parseJson<any>((db.prepare('SELECT settings FROM integrations WHERE id = ?').get(o.integration_id) as any)?.settings, {});
+      const catalogId = b.catalog_id ?? (Number(settings.catalog_id) || defaultCatalogId());
+      const existing = o.sku ? (db.prepare('SELECT id FROM products WHERE sku = ? AND catalog_id = ?').get(o.sku, catalogId) as any) : null;
       let pid = existing?.id;
       if (!pid) {
         pid = Number(
           db
-            .prepare('INSERT INTO products (sku, ean, name, price, stock, images) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(o.sku, o.ean, o.title, o.price, o.stock, JSON.stringify(o.image ? [o.image] : [])).lastInsertRowid,
+            .prepare('INSERT INTO products (catalog_id, sku, ean, name, price, images) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(catalogId, o.sku, o.ean, o.title, o.price, JSON.stringify(o.image ? [o.image] : [])).lastInsertRowid,
         );
-        db.prepare(`INSERT INTO stock_history (product_id, change, stock_after, reason) VALUES (?, ?, ?, 'offer import')`).run(pid, o.stock, o.stock);
+        db.prepare('INSERT INTO product_prices (product_id, price_group_id, price) VALUES (?, ?, ?)').run(pid, defaultPriceGroupId(), o.price);
+        // Stock goes to the warehouse used by this account (like an opening balance).
+        const wh = (settings.stock_warehouse_ids as number[] | undefined)?.[0] ?? catalogWarehouseId(catalogId);
+        if (o.stock > 0) adjustStock(pid, o.stock, `import z oferty ${o.external_id}`, wh, { user: userName(req) });
         created++;
-      }
+      } else linked++;
       db.prepare('UPDATE offers SET product_id = ? WHERE id = ?').run(pid, id);
     }
   })();
-  res.json({ created });
+  res.json({ created, linked });
 });
 
 offersRouter.post('/push', async (req, res) => {
@@ -399,7 +408,7 @@ offersRouter.post('/list', async (req, res) => {
       results.push({ product_id: pid, ok: false, error: `Already listed (${existing.external_id})` });
       continue;
     }
-    const price = marketplacePrice(p.price, integration.settings);
+    const price = marketplacePrice(offerBasePrice(p.id, integration.settings) ?? p.price, integration.settings);
     const title = (b.title_template || '{name}').replace('{name}', p.name).replace('{sku}', p.sku).slice(0, 200);
     try {
       const o = await connector.createOffer({

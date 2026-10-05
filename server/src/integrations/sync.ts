@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { sendLifecycleMails } from '../services/lifecycle-mail.js';
 import { openJson, sealJson } from '../lib/secrets.js';
+import { availableStock } from '../services/stock.js';
 import { backupAll } from '../services/backup.js';
 import { config } from '../config.js';
 import { db, parseJson, runWithTenant } from '../db/index.js';
@@ -173,12 +174,19 @@ export async function syncOffers(id: number) {
 }
 
 /** Stock of a product as seen by an integration (all warehouses or the selected ones). */
+/** Stock offered on a marketplace: available stock (minus reservations; variants summed, bundles from components). */
 export function offerStock(productId: number, warehouseIds: number[] | undefined): number {
-  if (!warehouseIds?.length) return (db.prepare('SELECT stock FROM products WHERE id = ?').get(productId) as { stock: number } | undefined)?.stock ?? 0;
-  const r = db
-    .prepare(`SELECT COALESCE(SUM(stock), 0) s FROM product_stock WHERE product_id = ? AND warehouse_id IN (${warehouseIds.map(() => '?').join(',')})`)
-    .get(productId, ...warehouseIds) as { s: number };
-  return r.s;
+  return availableStock(productId, warehouseIds?.length ? warehouseIds.map(Number) : null);
+}
+
+/** Inventory price of a product in the integration's price group (default group otherwise). */
+export function offerBasePrice(productId: number, s: IntegrationSettings): number | undefined {
+  const group = Number(s.price_group_id) || null;
+  if (group) {
+    const r = db.prepare('SELECT price FROM product_prices WHERE product_id = ? AND price_group_id = ?').get(productId, group) as { price: number } | undefined;
+    if (r) return r.price;
+  }
+  return (db.prepare('SELECT price FROM products WHERE id = ?').get(productId) as { price: number } | undefined)?.price;
 }
 
 /** Price sent to a marketplace, after the integration's price rules. */
@@ -217,10 +225,10 @@ export async function pushOffers(
     if (!integrations.has(off.integration_id)) integrations.set(off.integration_id, loadIntegration(off.integration_id));
     const integration = integrations.get(off.integration_id)!;
     if (!integration.enabled || off.status === 'ended') continue;
-    const p = db.prepare('SELECT price FROM products WHERE id = ?').get(off.product_id) as { price: number } | undefined;
-    if (!p) continue;
+    const base = offerBasePrice(off.product_id, integration.settings);
+    if (base === undefined) continue;
     const stock = marketplaceStock(offerStock(off.product_id, integration.settings.stock_warehouse_ids as number[] | undefined), integration.settings);
-    const price = marketplacePrice(p.price, integration.settings);
+    const price = marketplacePrice(base, integration.settings);
     const change: { stock?: number; price?: number } = {};
     if (doStock && integration.settings.sync_stock && off.sync_stock && (opts.force || stock !== off.stock)) change.stock = stock;
     if (doPrice && integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(price - off.price) > 0.001)) change.price = price;

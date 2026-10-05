@@ -384,4 +384,185 @@ export const migrations: string[] = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+  // 1: inventory like BaseLinker — price groups, catalog settings, texts per language/channel,
+  // bundles, tags, extra fields, product log, reservations, stocktaking.
+  `
+  UPDATE products SET catalog_id = (SELECT id FROM catalogs ORDER BY is_default DESC, id LIMIT 1) WHERE catalog_id IS NULL;
+  UPDATE products SET catalog_id = (SELECT p.catalog_id FROM products p WHERE p.id = products.parent_id) WHERE parent_id IS NOT NULL;
+  UPDATE products SET sku = sku || '-DUP' || id
+    WHERE sku != '' AND id NOT IN (SELECT MIN(id) FROM products WHERE sku != '' GROUP BY catalog_id, sku);
+  CREATE UNIQUE INDEX ux_products_catalog_sku ON products(catalog_id, sku) WHERE sku != '';
+  INSERT OR IGNORE INTO product_stock (product_id, warehouse_id, stock)
+    SELECT p.id, (SELECT id FROM warehouses ORDER BY is_default DESC, id LIMIT 1), p.stock FROM products p
+    WHERE p.stock != 0 AND NOT EXISTS (SELECT 1 FROM product_stock s WHERE s.product_id = p.id);
+  UPDATE products SET stock = COALESCE((SELECT SUM(stock) FROM product_stock s WHERE s.product_id = products.id), 0);
+
+  CREATE TABLE price_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    currency TEXT NOT NULL DEFAULT 'PLN',
+    is_default INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO price_groups (name, description, is_default) VALUES ('Detaliczna', 'Cena podstawowa', 1);
+  CREATE TABLE product_prices (
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    price_group_id INTEGER NOT NULL REFERENCES price_groups(id) ON DELETE CASCADE,
+    price REAL NOT NULL,
+    PRIMARY KEY (product_id, price_group_id)
+  );
+  INSERT INTO product_prices (product_id, price_group_id, price) SELECT id, (SELECT id FROM price_groups LIMIT 1), price FROM products;
+
+  ALTER TABLE catalogs ADD COLUMN languages TEXT NOT NULL DEFAULT '["pl"]';
+  ALTER TABLE catalogs ADD COLUMN default_language TEXT NOT NULL DEFAULT 'pl';
+  ALTER TABLE catalogs ADD COLUMN default_price_group_id INTEGER REFERENCES price_groups(id) ON DELETE SET NULL;
+  ALTER TABLE catalogs ADD COLUMN default_warehouse_id INTEGER REFERENCES warehouses(id) ON DELETE SET NULL;
+  CREATE TABLE catalog_price_groups (
+    catalog_id INTEGER NOT NULL REFERENCES catalogs(id) ON DELETE CASCADE,
+    price_group_id INTEGER NOT NULL REFERENCES price_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (catalog_id, price_group_id)
+  );
+  CREATE TABLE catalog_warehouses (
+    catalog_id INTEGER NOT NULL REFERENCES catalogs(id) ON DELETE CASCADE,
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+    PRIMARY KEY (catalog_id, warehouse_id)
+  );
+  INSERT INTO catalog_price_groups SELECT c.id, g.id FROM catalogs c, price_groups g;
+  INSERT INTO catalog_warehouses SELECT c.id, w.id FROM catalogs c, warehouses w;
+  UPDATE catalogs SET default_price_group_id = (SELECT id FROM price_groups LIMIT 1),
+    default_warehouse_id = (SELECT id FROM warehouses ORDER BY is_default DESC, id LIMIT 1);
+
+  ALTER TABLE warehouses ADD COLUMN type TEXT NOT NULL DEFAULT 'own';
+  ALTER TABLE warehouses ADD COLUMN allow_negative INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE product_stock ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN avg_cost REAL NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN is_bundle INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN min_stock INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN features TEXT NOT NULL DEFAULT '[]';
+  UPDATE products SET avg_cost = purchase_price;
+  ALTER TABLE categories ADD COLUMN catalog_id INTEGER REFERENCES catalogs(id) ON DELETE CASCADE;
+  ALTER TABLE categories ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;
+  UPDATE categories SET catalog_id = (SELECT id FROM catalogs ORDER BY is_default DESC, id LIMIT 1);
+  ALTER TABLE orders ADD COLUMN stock_reserved INTEGER NOT NULL DEFAULT 0;
+
+  CREATE TABLE product_texts (
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    lang TEXT NOT NULL,
+    integration_id INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (product_id, lang, integration_id)
+  );
+  CREATE TABLE bundle_items (
+    bundle_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (bundle_id, product_id)
+  );
+  CREATE TABLE extra_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'text',
+    options TEXT NOT NULL DEFAULT '[]',
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE product_extra_values (
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    field_id INTEGER NOT NULL REFERENCES extra_fields(id) ON DELETE CASCADE,
+    value TEXT NOT NULL,
+    PRIMARY KEY (product_id, field_id)
+  );
+  CREATE TABLE tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL DEFAULT '#1271d3'
+  );
+  CREATE TABLE product_tags (
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (product_id, tag_id)
+  );
+  CREATE TABLE product_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    user_name TEXT NOT NULL DEFAULT 'System',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX idx_product_log ON product_log(product_id);
+  ALTER TABLE stock_history ADD COLUMN doc_id INTEGER;
+  ALTER TABLE stock_history ADD COLUMN user_name TEXT NOT NULL DEFAULT '';
+  CREATE TABLE stocktakes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+    catalog_id INTEGER REFERENCES catalogs(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','canceled')),
+    category_id INTEGER,
+    doc_id INTEGER,
+    user_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    closed_at TEXT
+  );
+  CREATE TABLE stocktake_items (
+    stocktake_id INTEGER NOT NULL REFERENCES stocktakes(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    expected INTEGER NOT NULL,
+    counted INTEGER,
+    PRIMARY KEY (stocktake_id, product_id)
+  );
+  `,
+  // 2: warehouse documents with more types, cancellation, numbering on confirm and line snapshots.
+  `-- nofk
+  CREATE TABLE warehouse_docs_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL CHECK (type IN ('PZ','PW','WZ','RW','MM','ZW','BO','INW')),
+    number TEXT NOT NULL DEFAULT '',
+    seq INTEGER,
+    period TEXT,
+    doc_date TEXT NOT NULL DEFAULT (date('now')),
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+    target_warehouse_id INTEGER REFERENCES warehouses(id),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','canceled')),
+    contractor TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    order_id INTEGER,
+    reverses_doc_id INTEGER,
+    user_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    confirmed_at TEXT,
+    UNIQUE (type, period, seq)
+  );
+  INSERT INTO warehouse_docs_new (id, type, number, doc_date, warehouse_id, target_warehouse_id, status, contractor, notes, user_name, created_at, confirmed_at)
+    SELECT id, type, number, date(created_at), warehouse_id, target_warehouse_id, CASE WHEN status = 'confirmed' THEN 'confirmed' ELSE 'draft' END,
+      contractor, notes, user_name, created_at, confirmed_at FROM warehouse_docs;
+  UPDATE warehouse_docs_new SET number = '' WHERE status = 'draft';
+  -- Numbers like "PZ 3/10/2026" → seq 3, period 10/2026 (first occurrence only, older versions could duplicate numbers).
+  UPDATE warehouse_docs_new SET
+    seq = CAST(substr(number, instr(number, ' ') + 1, instr(number, '/') - instr(number, ' ') - 1) AS INTEGER),
+    period = substr(number, instr(number, '/') + 1)
+  WHERE number LIKE '% %/%' AND id IN (SELECT MIN(id) FROM warehouse_docs_new WHERE number != '' GROUP BY type, number);
+  CREATE TABLE warehouse_doc_items_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES warehouse_docs_new(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    name TEXT NOT NULL DEFAULT '',
+    sku TEXT NOT NULL DEFAULT '',
+    ean TEXT NOT NULL DEFAULT '',
+    quantity INTEGER NOT NULL,
+    price REAL NOT NULL DEFAULT 0,
+    stock_before INTEGER
+  );
+  INSERT INTO warehouse_doc_items_new (id, doc_id, product_id, name, sku, ean, quantity, price)
+    SELECT i.id, i.doc_id, i.product_id, COALESCE(p.name, ''), COALESCE(p.sku, ''), COALESCE(p.ean, ''), i.quantity, i.price
+    FROM warehouse_doc_items i LEFT JOIN products p ON p.id = i.product_id;
+  DROP TABLE warehouse_doc_items;
+  DROP TABLE warehouse_docs;
+  ALTER TABLE warehouse_docs_new RENAME TO warehouse_docs;
+  ALTER TABLE warehouse_doc_items_new RENAME TO warehouse_doc_items;
+  CREATE INDEX idx_doc_items_doc ON warehouse_doc_items(doc_id);
+  CREATE INDEX idx_doc_items_product ON warehouse_doc_items(product_id);
+  `,
 ];

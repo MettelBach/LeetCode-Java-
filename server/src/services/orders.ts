@@ -126,7 +126,10 @@ function insertItem(orderId: number, it: ItemInput, defaultTax: number) {
       image ||= parseJson<string[]>(p.images, [])[0] ?? '';
     }
   } else {
-    const p = findProduct(sku, ean);
+    // Prefer the catalog assigned to the order's integration.
+    const src = db.prepare('SELECT i.settings FROM orders o JOIN integrations i ON i.id = o.integration_id WHERE o.id = ?').get(orderId) as { settings: string } | undefined;
+    const catalogId = Number(parseJson<any>(src?.settings, {}).catalog_id) || null;
+    const p = findProduct(sku, ean, catalogId);
     if (p) {
       productId = p.id;
       weight ||= p.weight;

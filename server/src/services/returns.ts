@@ -120,7 +120,7 @@ export function returnToStock(id: number, user = 'System') {
     for (const it of r.items as ReturnItem[]) {
       if (!it.product_id) continue;
       if (r.order_id) adjustOrderItemStock(r.order_id, it.product_id, it.quantity, 'return');
-      else adjustStock(it.product_id, it.quantity, 'return');
+      else adjustStock(it.product_id, it.quantity, 'return', null, { user });
     }
     db.prepare('UPDATE returns SET stock_returned = 1 WHERE id = ?').run(id);
   });

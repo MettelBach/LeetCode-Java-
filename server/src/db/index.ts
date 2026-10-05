@@ -56,11 +56,20 @@ function migrate(d: DB, list: string[], onFirst?: (d: DB) => void) {
   const done = new Set(d.prepare('SELECT id FROM migrations').all().map((r: any) => r.id as number));
   list.forEach((sql, i) => {
     if (done.has(i)) return;
-    d.transaction(() => {
-      d.exec(sql);
-      d.prepare('INSERT INTO migrations (id) VALUES (?)').run(i);
-      if (i === 0) onFirst?.(d);
-    })();
+    // Migrations that rebuild tables must run with foreign keys off (otherwise
+    // DROP TABLE would cascade); integrity is verified afterwards.
+    const noFk = sql.trimStart().startsWith('-- nofk');
+    if (noFk) d.pragma('foreign_keys = OFF');
+    try {
+      d.transaction(() => {
+        d.exec(sql);
+        if (noFk && (d.pragma('foreign_key_check') as unknown[]).length) throw new Error(`Migration ${i}: foreign key check failed`);
+        d.prepare('INSERT INTO migrations (id) VALUES (?)').run(i);
+        if (i === 0) onFirst?.(d);
+      })();
+    } finally {
+      if (noFk) d.pragma('foreign_keys = ON');
+    }
   });
 }
 
