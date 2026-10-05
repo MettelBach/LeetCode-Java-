@@ -52,6 +52,9 @@ await step('add manual order', async () => {
   await page.getByPlaceholder('Search inventory: name, SKU, EAN...').fill('Kawa');
   await page.getByRole('button', { name: /Kawa ziarnista/ }).click();
   await page.getByLabel('Name and surname').first().fill('Jan E2E');
+  await page.getByLabel('Address').first().fill('ul. Testowa 5');
+  await page.getByLabel('Postal code').first().fill('00-950');
+  await page.getByLabel('City').first().fill('Warszawa');
   await page.getByRole('button', { name: 'Add order' }).last().click();
   await page.getByText('Order information', { exact: true }).waitFor();
 });

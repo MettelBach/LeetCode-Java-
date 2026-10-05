@@ -266,10 +266,10 @@ export default function OrdersPage() {
                           {o.integration_name ?? (o.source === 'manual' ? t('Other') : o.source)}
                         </div>
                       </td>
-                      <td className="items-cell" style={{ minWidth: 200 }}>
+                      <td className="items-cell" style={{ minWidth: 180 }}>
                         {o.items.slice(0, 4).map((i: any, idx: number) => (
                           <div key={idx} className="item-line">
-                            {i.image ? <img src={i.image} alt="" className="mini-thumb" loading="lazy" /> : <span className="mini-thumb empty" />}
+                            {i.image ? <img src={i.image} alt="" className="mini-thumb" loading="lazy" /> : <span className="mini-thumb none" />}
                             <span>
                               <i>{i.quantity}x</i> {i.name}
                               {i.attributes ? <span className="text-muted"> ({i.attributes})</span> : null}
@@ -278,7 +278,7 @@ export default function OrdersPage() {
                         ))}
                         {o.items.length > 4 && <div className="text-muted">+ {o.items.length - 4} …</div>}
                       </td>
-                      <td style={{ maxWidth: 170, fontSize: 13.5 }}>
+                      <td style={{ maxWidth: 150, fontSize: 13.5 }}>
                         {o.payment_method && <div>{o.payment_method}</div>}
                         {o.buyer_comment && (
                           <div className="text-muted" title={o.buyer_comment} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -290,7 +290,7 @@ export default function OrdersPage() {
                       <td className="num">
                         <span className="price">{money(o.total, o.currency)}</span>
                       </td>
-                      <td style={{ minWidth: 150 }}>
+                      <td style={{ minWidth: 140, maxWidth: 190 }}>
                         <div>
                           {st && (
                             <Dropdown
@@ -341,9 +341,9 @@ export default function OrdersPage() {
                         </span>
                         </div>
                       </td>
-                      <td className="num nowrap" style={{ fontSize: 13.5 }}>
+                      <td className="num" style={{ fontSize: 13, minWidth: 82 }}>
                         <div style={{ color: '#4a5057' }}>{fmtDateTime(o.date_add)}</div>
-                        <div className="date-sub">{fmtDateTime(o.status_changed_at)}</div>
+                        <div className="date-sub" title={t('In status since')}>{fmtDateTime(o.status_changed_at)}</div>
                       </td>
                     </tr>
                   );

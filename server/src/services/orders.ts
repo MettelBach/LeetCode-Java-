@@ -232,7 +232,7 @@ export function createOrder(input: OrderInput, user = 'System'): number {
         round2(data.paid_amount),
         round2(data.paid_amount),
         when,
-        input.source && input.source !== 'manual' ? input.source : '',
+        '',
         user,
       );
     }

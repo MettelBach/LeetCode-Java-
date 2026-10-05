@@ -1628,4 +1628,5 @@ export const pl: Record<string, string> = {
   "Warehouse document from selected": "Dokument magazynowy z zaznaczonych",
   "Without description": "Bez opisu",
   "empty": "puste",
+  "In status since": "W statusie od",
 };

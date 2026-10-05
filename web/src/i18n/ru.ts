@@ -1628,4 +1628,5 @@ export const ru: Record<string, string> = {
   "Warehouse document from selected": "Складской документ из выбранных",
   "Without description": "Без описания",
   "empty": "пусто",
+  "In status since": "В статусе с",
 };
