@@ -32,6 +32,7 @@ const T: Record<Lang, Record<string, string>> = {
       'Dzień dobry [buyer_name],\n\nTwoje zamówienie nr [order_id] zostało wysłane.\nNumer przesyłki: [tracking_number]\n\nPozdrawiamy,\n[company_name]',
     wh: 'Magazyn główny',
     cat: 'Katalog główny',
+    pg: 'Detaliczna',
     inv: 'Faktury',
     pro: 'Proformy',
     rec: 'Paragony',
@@ -66,6 +67,7 @@ const T: Record<Lang, Record<string, string>> = {
       'Hello [buyer_name],\n\nyour order no. [order_id] has been shipped.\nTracking number: [tracking_number]\n\nBest regards,\n[company_name]',
     wh: 'Main warehouse',
     cat: 'Main catalog',
+    pg: 'Retail',
     inv: 'Invoices',
     pro: 'Pro forma',
     rec: 'Receipts',
@@ -100,6 +102,7 @@ const T: Record<Lang, Record<string, string>> = {
       'Здравствуйте, [buyer_name]!\n\nВаш заказ № [order_id] отправлен.\nНомер отправления: [tracking_number]\n\nС уважением,\n[company_name]',
     wh: 'Основной склад',
     cat: 'Основной каталог',
+    pg: 'Розничная',
     inv: 'Счета-фактуры',
     pro: 'Проформы',
     rec: 'Чеки',
@@ -137,6 +140,15 @@ export function seedDefaults(db: DB, langParam = 'pl') {
 
     db.prepare(`INSERT INTO warehouses (name, code, is_default) VALUES (?, 'MAG1', 1)`).run(t.wh);
     db.prepare('INSERT INTO catalogs (name, is_default) VALUES (?, 1)').run(t.cat);
+    // The default catalog uses the default warehouse and price group (BaseLinker-like catalog settings).
+    db.prepare(`UPDATE price_groups SET name = ? WHERE is_default = 1`).run(t.pg);
+    db.prepare(
+      `UPDATE catalogs SET default_warehouse_id = (SELECT id FROM warehouses WHERE is_default = 1),
+         default_price_group_id = (SELECT id FROM price_groups WHERE is_default = 1),
+         languages = ?, default_language = ? WHERE is_default = 1`,
+    ).run(JSON.stringify(['pl']), 'pl');
+    db.prepare('INSERT OR IGNORE INTO catalog_warehouses (catalog_id, warehouse_id) SELECT c.id, w.id FROM catalogs c, warehouses w').run();
+    db.prepare('INSERT OR IGNORE INTO catalog_price_groups (catalog_id, price_group_id) SELECT c.id, g.id FROM catalogs c, price_groups g').run();
 
     const ser = db.prepare('INSERT INTO invoice_series (name, type, format, reset_period, is_default) VALUES (?, ?, ?, ?, 1)');
     ser.run(t.inv, 'invoice', 'FV %N/%M/%Y', 'month');

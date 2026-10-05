@@ -110,6 +110,18 @@ function stocksOf(productId: number) {
     .all(productId) as { warehouse_id: number; name: string; code: string; stock: number; reserved: number }[];
 }
 
+/** "Biały XL" → "BIALYXL" (Polish letters transliterated for SKUs). */
+function slugSku(v: string) {
+  const map: Record<string, string> = { ą: 'a', ć: 'c', ę: 'e', ł: 'l', ń: 'n', ó: 'o', ś: 's', ź: 'z', ż: 'z' };
+  return v
+    .toLowerCase()
+    .replace(/[ąćęłńóśźż]/g, (m) => map[m])
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '');
+}
+
 /* ---------------------------------- schema ---------------------------------- */
 
 const productSchema = z.object({
@@ -777,7 +789,7 @@ productsRouter.post('/:id/variants/generate', (req, res) => {
       const label = keys.map((k) => c[k]).join(' / ');
       const existing = (db.prepare('SELECT attributes FROM products WHERE parent_id = ?').all(id) as any[]).some((v) => JSON.stringify(parseJson(v.attributes, {})) === JSON.stringify(c));
       if (existing) continue;
-      const skuPart = keys.map((k) => c[k].toUpperCase().replace(/[^A-Z0-9]+/g, '')).join('-');
+      const skuPart = keys.map((k) => slugSku(c[k])).join('-');
       const sku = parent.sku ? (b.sku_pattern ?? '{sku}-{variant}').replace('{sku}', parent.sku).replace('{variant}', skuPart) : '';
       checkSku(sku, parent.catalog_id);
       const vid = Number(

@@ -23,7 +23,7 @@ import OrdersPage from './pages/orders/OrdersPage';
 import CategoriesPage from './pages/products/CategoriesPage';
 import ProductEdit from './pages/products/ProductEdit';
 import ProductsPage from './pages/products/ProductsPage';
-import { CatalogsPage, DocumentNew, DocumentsPage, DocumentView, WarehousesPage } from './pages/products/Warehouses';
+import { CatalogsPage, DocumentEditor, DocumentsPage, DocumentView, PriceGroupsPage, StocktakeView, StocktakingPage, WarehousesPage } from './pages/products/Warehouses';
 import ReturnsPage, { ReturnDetail } from './pages/returns/ReturnsPage';
 import SettingsPage from './pages/settings/SettingsPage';
 import PackingPage from './pages/orders/PackingPage';
@@ -99,8 +99,12 @@ export default function App() {
         <Route path="products/warehouses" element={<WarehousesPage />} />
         <Route path="products/catalogs" element={<CatalogsPage />} />
         <Route path="products/documents" element={<DocumentsPage />} />
-        <Route path="products/documents/new" element={<DocumentNew />} />
+        <Route path="products/documents/new" element={<DocumentEditor />} />
+        <Route path="products/documents/:id/edit" element={<DocumentEditor />} />
         <Route path="products/documents/:id" element={<DocumentView />} />
+        <Route path="products/price-groups" element={<PriceGroupsPage />} />
+        <Route path="products/stocktaking" element={<StocktakingPage />} />
+        <Route path="products/stocktaking/:id" element={<StocktakeView />} />
         <Route path="products/:id" element={<ProductEdit />} />
         <Route path="offers" element={<OffersPage />} />
         <Route path="integrations" element={<IntegrationsPage />} />
