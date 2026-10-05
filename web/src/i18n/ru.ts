@@ -1503,4 +1503,9 @@ export const ru: Record<string, string> = {
   "The referenced record does not exist or is still in use": "Связанная запись не существует или ещё используется",
   "A record with this value already exists": "Запись с таким значением уже существует",
   "No price in the price group of this integration": "Нет цены в ценовой группе этой интеграции",
+  "Returns policy": "Условия возврата",
+  "Complaints (implied warranty)": "Рекламации (гарантия продавца)",
+  "Warranty": "Гарантия",
+  "Category ID": "ID категории",
+  "OLX category id (from the OLX API /categories)": "ID категории OLX (из API OLX /categories)",
 };

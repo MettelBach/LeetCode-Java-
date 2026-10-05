@@ -238,7 +238,24 @@ export class AllegroConnector implements Connector {
 
   async listingOptions(): Promise<ListingOptions> {
     const r = await this.api<{ shippingRates: { id: string; name: string }[] }>('GET', '/sale/shipping-rates');
-    return { shipping_rates: (r.shippingRates ?? []).map((x) => ({ id: x.id, name: x.name })), requires_ean: false, requires_category: false };
+    const me = await this.api<{ id: string }>('GET', '/me');
+    // After-sales conditions defined by the seller on Allegro (returns, complaints, warranty).
+    const conditions = async (kind: string, key: string) => {
+      try {
+        const res = await this.api<Record<string, { id: string; name: string }[]>>('GET', `/after-sales-service-conditions/${kind}?seller.id=${encodeURIComponent(me.id)}`);
+        return (res[key] ?? []).map((x) => ({ id: x.id, name: x.name }));
+      } catch {
+        return [];
+      }
+    };
+    return {
+      shipping_rates: (r.shippingRates ?? []).map((x) => ({ id: x.id, name: x.name })),
+      return_policies: await conditions('return-policies', 'returnPolicies'),
+      implied_warranties: await conditions('implied-warranties', 'impliedWarranties'),
+      warranties: await conditions('warranties', 'warranties'),
+      requires_ean: false,
+      requires_category: false,
+    };
   }
 
   async createOffer(input: ListingInput): Promise<MarketplaceOffer> {
@@ -265,7 +282,19 @@ export class AllegroConnector implements Connector {
       publication: { status: 'ACTIVE' },
     };
     if (input.category_id) body.category = { id: input.category_id };
-    if (input.shipping_rates_id) body.delivery = { shippingRates: { id: input.shipping_rates_id } };
+    if (input.shipping_rates_id || input.handling_time !== undefined) {
+      body.delivery = {
+        ...(input.shipping_rates_id ? { shippingRates: { id: input.shipping_rates_id } } : {}),
+        ...(input.handling_time !== undefined ? { handlingTime: allegroHandlingTime(input.handling_time) } : {}),
+      };
+    }
+    if (input.return_policy_id || input.implied_warranty_id || input.warranty_id) {
+      body.afterSalesServices = {
+        ...(input.return_policy_id ? { returnPolicy: { id: input.return_policy_id } } : {}),
+        ...(input.implied_warranty_id ? { impliedWarranty: { id: input.implied_warranty_id } } : {}),
+        ...(input.warranty_id ? { warranty: { id: input.warranty_id } } : {}),
+      };
+    }
     const o = await this.api<any>('POST', '/sale/product-offers', body);
     return {
       external_id: String(o.id),
@@ -287,4 +316,11 @@ export class AllegroConnector implements Connector {
       offerCriteria: [{ offers: [{ id: offer.external_id }], type: 'CONTAINS_OFFERS' }],
     });
   }
+}
+
+/** Handling time in days → the nearest allowed Allegro value that is not shorter. */
+export function allegroHandlingTime(days: number): string {
+  const allowed = [0, 1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60];
+  const d = allowed.find((a) => a >= days) ?? 60;
+  return d === 0 ? 'PT0S' : d === 1 ? 'PT24H' : `P${d}D`;
 }

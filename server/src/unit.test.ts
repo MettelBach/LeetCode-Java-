@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapCheckoutForm } from './integrations/allegro.js';
+import { allegroHandlingTime, mapCheckoutForm } from './integrations/allegro.js';
 import { empikBaseUrl, iso2, mapMiraklOrder } from './integrations/empik.js';
 import { isPrivateIp } from './lib/net.js';
 import { dueMessage } from './services/lifecycle-mail.js';
@@ -246,5 +246,14 @@ describe('OLX', () => {
     expect(o).toMatchObject({ external_id: '901', sku: 'ROW-1', price: 450, stock: 1, status: 'active', image: 'https://x/1.jpg' });
     expect(mapAdvert({ id: 2, status: 'removed_by_user' }).status).toBe('ended');
     expect(mapAdvert({ id: 3, status: 'limited' }).stock).toBe(0);
+  });
+});
+
+describe('Allegro handling time', () => {
+  it('rounds up to an allowed value', () => {
+    expect(allegroHandlingTime(0)).toBe('PT0S');
+    expect(allegroHandlingTime(1)).toBe('PT24H');
+    expect(allegroHandlingTime(6)).toBe('P7D');
+    expect(allegroHandlingTime(90)).toBe('P60D');
   });
 });

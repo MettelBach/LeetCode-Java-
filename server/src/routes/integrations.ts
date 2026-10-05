@@ -462,6 +462,9 @@ offersRouter.post('/list', async (req, res) => {
       shipping_rates_id: z.string().max(100).optional(),
       category_id: z.string().max(50).optional(),
       handling_time: z.number().int().min(0).max(60).optional(),
+      return_policy_id: z.string().max(100).optional(),
+      implied_warranty_id: z.string().max(100).optional(),
+      warranty_id: z.string().max(100).optional(),
       title_template: z.string().max(200).optional(),
     })
     .parse(req.body);
@@ -504,6 +507,9 @@ offersRouter.post('/list', async (req, res) => {
         category_id: b.category_id,
         shipping_rates_id: b.shipping_rates_id,
         handling_time: b.handling_time,
+        return_policy_id: b.return_policy_id,
+        implied_warranty_id: b.implied_warranty_id,
+        warranty_id: b.warranty_id,
       });
       db.prepare(
         `INSERT INTO offers (integration_id, external_id, title, sku, ean, price, currency, stock, status, url, image, product_id, raw, last_synced_at)

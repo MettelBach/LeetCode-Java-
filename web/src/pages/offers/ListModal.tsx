@@ -18,6 +18,7 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
   const [category, setCategory] = useState('');
   const [handling, setHandling] = useState('1');
   const [title, setTitle] = useState('{name}');
+  const [after, setAfter] = useState<{ return_policy_id: string; implied_warranty_id: string; warranty_id: string }>({ return_policy_id: '', implied_warranty_id: '', warranty_id: '' });
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<any[] | null>(null);
   const integration = integrations.data?.find((i) => i.id === integrationId);
@@ -37,6 +38,9 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
         category_id: category || undefined,
         handling_time: Number(handling) || undefined,
         title_template: title || undefined,
+        return_policy_id: after.return_policy_id || undefined,
+        implied_warranty_id: after.implied_warranty_id || undefined,
+        warranty_id: after.warranty_id || undefined,
       }),
     );
     setBusy(false);
@@ -97,7 +101,12 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
                 key={i.id}
                 className="btn"
                 style={{ height: 54, borderWidth: 2, borderColor: integrationId === i.id ? 'var(--blue)' : undefined }}
-                onClick={() => setIntegrationId(i.id)}
+                onClick={() => {
+                  setIntegrationId(i.id);
+                  setShipping('');
+                  setCategory('');
+                  setAfter({ return_policy_id: '', implied_warranty_id: '', warranty_id: '' });
+                }}
                 disabled={!i.enabled}
               >
                 <MarketplaceLogo type={i.type} size={30} /> {i.name}
@@ -135,9 +144,32 @@ export function ListOnMarketplaceModal({ productIds, onClose, onDone }: { produc
                   <Field label={t('Allegro category ID (optional)')} help={t('Needed only when the product is not found in the Allegro catalogue by EAN')}>
                     <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} />
                   </Field>
+                  {(
+                    [
+                      ['return_policy_id', 'return_policies', 'Returns policy'],
+                      ['implied_warranty_id', 'implied_warranties', 'Complaints (implied warranty)'],
+                      ['warranty_id', 'warranties', 'Warranty'],
+                    ] as const
+                  ).map(([key, list, label]) => (
+                    <Field key={key} label={t(label)}>
+                      <select className="select" value={after[key]} onChange={(e) => setAfter({ ...after, [key]: e.target.value })}>
+                        <option value="">{t('— none —')}</option>
+                        {options.data?.[list]?.map((x: any) => (
+                          <option key={x.id} value={x.id}>
+                            {x.name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  ))}
                 </>
               )}
-              {integration.type !== 'allegro' && (
+              {integration.type !== 'allegro' && options.data?.requires_category && (
+                <Field label={t('Category ID')} help={integration.type === 'olx' ? t('OLX category id (from the OLX API /categories)') : undefined}>
+                  <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} />
+                </Field>
+              )}
+              {integration.type !== 'olx' && (
                 <Field label={t('Handling time (days)')}>
                   <input className="input" value={handling} onChange={(e) => setHandling(e.target.value)} inputMode="numeric" />
                 </Field>

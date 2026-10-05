@@ -88,10 +88,17 @@ export interface ListingInput {
   category_id?: string;
   shipping_rates_id?: string;
   handling_time?: number;
+  /** Allegro after-sales conditions (required for business sellers). */
+  return_policy_id?: string;
+  implied_warranty_id?: string;
+  warranty_id?: string;
 }
 
 export interface ListingOptions {
   shipping_rates?: { id: string; name: string }[];
+  return_policies?: { id: string; name: string }[];
+  implied_warranties?: { id: string; name: string }[];
+  warranties?: { id: string; name: string }[];
   requires_ean: boolean;
   requires_category: boolean;
 }

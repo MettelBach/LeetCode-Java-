@@ -177,13 +177,17 @@ export class DemoConnector implements Connector {
   async listingOptions(): Promise<ListingOptions> {
     return {
       shipping_rates: this.type === 'allegro' ? [{ id: 'demo-std', name: 'Standard (demo)' }, { id: 'demo-free', name: 'Darmowa dostawa (demo)' }] : undefined,
-      requires_ean: this.type !== 'allegro',
-      requires_category: false,
+      return_policies: this.type === 'allegro' ? [{ id: 'demo-ret', name: 'Zwroty 14 dni (demo)' }] : undefined,
+      implied_warranties: this.type === 'allegro' ? [{ id: 'demo-rek', name: 'Reklamacje — firma (demo)' }] : undefined,
+      warranties: this.type === 'allegro' ? [{ id: 'demo-gw', name: 'Gwarancja producenta 24 mies. (demo)' }] : undefined,
+      requires_ean: this.type === 'empik' || this.type === 'kaufland',
+      requires_category: this.type === 'olx',
     };
   }
 
   async createOffer(input: ListingInput): Promise<MarketplaceOffer> {
-    if (this.type !== 'allegro' && !input.ean) throw new Error(`${this.type} requires the product EAN`);
+    if ((this.type === 'empik' || this.type === 'kaufland') && !input.ean) throw new Error(`${this.type} requires the product EAN`);
+    if (this.type === 'olx' && !input.category_id) throw new Error('Choose an OLX category id');
     const offers = this.offers();
     const id = this.type === 'allegro' ? String(14000000000 + rndInt(1, 999999999)) : this.type === 'kaufland' ? String(rndInt(400000000, 499999999)) : `P${rndInt(2000, 9999)}`;
     const o: MarketplaceOffer = {
