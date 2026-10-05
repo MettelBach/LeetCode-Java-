@@ -28,7 +28,8 @@ export function useStatuses() {
 
 export interface Integration {
   id: number;
-  type: 'allegro' | 'empik' | 'kaufland';
+  type: 'allegro' | 'empik' | 'kaufland' | 'olx';
+  category?: string;
   name: string;
   enabled: boolean;
   demo: boolean;

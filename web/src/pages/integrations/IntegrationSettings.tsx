@@ -7,6 +7,7 @@ import { Empty, Field, Loading, MarketplaceLogo, Switch, Tabs, useAction, useCon
 import { useInvalidateOrders, useStatuses, type Integration } from '../../data';
 import { fmtDateTime } from '../../format';
 import { useT } from '../../i18n';
+import { usePriceGroups } from '../products/inventoryData';
 import { useCatalogs, useWarehouses } from '../products/Warehouses';
 
 type Tab = 'connection' | 'orders' | 'products' | 'log';
@@ -36,6 +37,15 @@ export default function IntegrationSettings() {
   const confirm = useConfirm();
   const [params] = useSearchParams();
   const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'connection');
+  const toast = useToast();
+  const oauth = params.get('oauth');
+  useEffect(() => {
+    if (!oauth) return;
+    if (oauth === 'ok') toast(t('Account authorized'), 'success');
+    else toast(oauth === 'denied' ? t('Authorization was canceled on the marketplace site') : t('Authorization failed — check Client ID and Client Secret and try again'), 'error');
+    nav(`/integrations/${id}`, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauth]);
   const q = useQuery({ queryKey: ['integration', id], queryFn: () => api.get<Integration>(`/integrations/${id}`) });
   const meta = useQuery({ queryKey: ['integrations-meta'], queryFn: () => api.get<any>('/integrations/meta'), staleTime: Infinity });
   const refresh = () => {
@@ -78,7 +88,7 @@ export default function IntegrationSettings() {
         onChange={setTab}
         tabs={[
           { id: 'connection', label: t('Connection') },
-          { id: 'orders', label: t('Orders') },
+          ...(i.type === 'olx' ? [] : [{ id: 'orders' as Tab, label: t('Orders') }]),
           { id: 'products', label: t('Offers and stock') },
           { id: 'log', label: t('Synchronization log') },
         ]}
@@ -139,6 +149,12 @@ function ConnectionTab({ i, onSaved }: { i: Integration; onSaved: () => void }) 
       }
     }, Math.max(5, 5) * 1000);
   };
+  const startOlx = async () => {
+    const saved = await save();
+    if (!saved) return;
+    const r = await run(() => api.post(`/integrations/${i.id}/olx/authorize`));
+    if (r?.url) window.location.href = r.url;
+  };
   const field = (k: string, label: string, secret = false, help?: string) => (
     <Field label={label} help={help}>
       <input
@@ -178,6 +194,12 @@ function ConnectionTab({ i, onSaved }: { i: Integration; onSaved: () => void }) 
                 {field('base_url', t('API address'), false, t('Default: https://marketplace.empik.com'))}
               </>
             )}
+            {i.type === 'olx' && (
+              <>
+                {field('client_id', 'Client ID')}
+                {field('client_secret', 'Client Secret', true)}
+              </>
+            )}
             {i.type === 'kaufland' && (
               <>
                 {field('client_key', 'Client Key', true)}
@@ -207,19 +229,26 @@ function ConnectionTab({ i, onSaved }: { i: Integration; onSaved: () => void }) 
               <KeyRound /> {i.authorized ? t('Authorize again') : t('Authorize Allegro account')}
             </button>
           )}
-          <button
-            className="btn"
-            onClick={async () => {
-              const r = await run(() => api.post(`/integrations/${i.id}/sync-orders`));
-              if (r) {
-                toast(t('{name}: {n} new orders', { name: i.name, n: r.imported ?? 0 }), 'success');
-                invalidateOrders();
-                onSaved();
-              }
-            }}
-          >
-            <RefreshCw /> {t('Download orders now')}
-          </button>
+          {i.type === 'olx' && !demo && (
+            <button className="btn" onClick={startOlx} disabled={!creds.client_id || !creds.client_secret}>
+              <KeyRound /> {i.authorized ? t('Authorize again') : t('Authorize OLX account')}
+            </button>
+          )}
+          {i.type !== 'olx' && (
+            <button
+              className="btn"
+              onClick={async () => {
+                const r = await run(() => api.post(`/integrations/${i.id}/sync-orders`));
+                if (r) {
+                  toast(t('{name}: {n} new orders', { name: i.name, n: r.imported ?? 0 }), 'success');
+                  invalidateOrders();
+                  onSaved();
+                }
+              }}
+            >
+              <RefreshCw /> {t('Download orders now')}
+            </button>
+          )}
         </div>
         {auth && (
           <div className="card-pad mt" style={{ background: 'var(--blue-light)', borderRadius: 8 }}>
@@ -233,7 +262,7 @@ function ConnectionTab({ i, onSaved }: { i: Integration; onSaved: () => void }) 
             </div>
           </div>
         )}
-        {i.type === 'allegro' && i.authorized && !demo && <p className="text-small" style={{ color: 'var(--green)' }}>✓ {t('Account authorized')}</p>}
+        {(i.type === 'allegro' || i.type === 'olx') && i.authorized && !demo && <p className="text-small" style={{ color: 'var(--green)' }}>✓ {t('Account authorized')}</p>}
       </div>
       <div className="card card-pad">
         <div className="card-title mb">{t('How to connect')}</div>
@@ -272,7 +301,26 @@ function ConnectionTab({ i, onSaved }: { i: Integration; onSaved: () => void }) 
             <li>{t('Requests are signed with HMAC-SHA256 — make sure the server clock is correct.')}</li>
           </ol>
         )}
-        <p className="help-text">{t('Orders are downloaded automatically every 10 minutes (faster with Accelerations); offers are refreshed every 6 hours.')}</p>
+        {i.type === 'olx' && (
+          <ol style={{ paddingLeft: 18, lineHeight: 1.7 }}>
+            <li>
+              {t('Register an application in the OLX developer portal')}{' '}
+              <a href="https://developer.olx.pl/" target="_blank" rel="noreferrer">
+                developer.olx.pl
+              </a>
+              .
+            </li>
+            <li>
+              {t('Set the redirect address of the application to:')} <code style={{ wordBreak: 'break-all' }}>{`${window.location.origin}/api/public/oauth/olx/callback`}</code>
+            </li>
+            <li>{t('Copy Client ID and Client Secret here and click "Authorize OLX account" — you will be redirected to OLX to log in.')}</li>
+            <li>{t('On the "Offers and stock" tab set the city and contact details used for new adverts.')}</li>
+            <li>{t('OLX adverts have no quantity: when stock drops to 0 the advert is deactivated and activated again when stock returns.')}</li>
+          </ol>
+        )}
+        {i.type !== 'olx' && (
+          <p className="help-text">{t('Orders are downloaded automatically every 10 minutes (faster with Accelerations); offers are refreshed every 6 hours.')}</p>
+        )}
       </div>
     </div>
   );
@@ -414,6 +462,7 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
   const toast = useToast();
   const warehouses = useWarehouses();
   const catalogs = useCatalogs();
+  const groups = usePriceGroups();
   const [s, setS] = useState<Record<string, any>>({
     ...i.settings,
     stock_warehouse_ids: i.settings.stock_warehouse_ids ?? [],
@@ -444,6 +493,15 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
             price_add: num(s.price_add),
             price_rounding: s.price_rounding,
             stock_reserve: Math.max(0, Math.round(num(s.stock_reserve))),
+            price_group_id: s.price_group_id ? Number(s.price_group_id) : null,
+            ...(i.type === 'olx'
+              ? {
+                  olx_city_id: s.olx_city_id ? Math.round(num(s.olx_city_id)) : null,
+                  olx_contact_name: String(s.olx_contact_name ?? '').trim(),
+                  olx_contact_phone: String(s.olx_contact_phone ?? '').trim(),
+                  olx_advertiser_type: s.olx_advertiser_type === 'private' ? 'private' : 'business',
+                }
+              : {}),
           },
         }),
       t('Saved'),
@@ -497,6 +555,16 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
         {t('Price rules and stock reserve')}
       </div>
       <div className="form-grid">
+        <Field label={t('Price group')} help={t('Prices sent to offers are taken from this price group')}>
+          <select className="select" value={s.price_group_id ?? ''} onChange={(e) => setS({ ...s, price_group_id: e.target.value })}>
+            <option value="">{t('Default price group of the catalog')}</option>
+            {groups.data?.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.currency})
+              </option>
+            ))}
+          </select>
+        </Field>
         <Field label={t('Price change vs inventory (%)')} help={t('e.g. 15 to cover the marketplace commission')}>
           <input className="input" value={s.price_markup_percent} onChange={(e) => setS({ ...s, price_markup_percent: e.target.value })} inputMode="decimal" />
         </Field>
@@ -514,6 +582,30 @@ function ProductsTab({ i, onSaved }: { i: Integration; onSaved: () => void }) {
           <input className="input" value={s.stock_reserve} onChange={(e) => setS({ ...s, stock_reserve: e.target.value })} inputMode="numeric" />
         </Field>
       </div>
+      {i.type === 'olx' && (
+        <>
+          <div className="card-title mt mb" style={{ fontSize: 16 }}>
+            {t('New OLX adverts')}
+          </div>
+          <div className="form-grid">
+            <Field label={t('City (OLX city id)')} help={t('Id of the city from the OLX API (/cities), e.g. 1 for Warsaw')}>
+              <input className="input" value={s.olx_city_id ?? ''} onChange={(e) => setS({ ...s, olx_city_id: e.target.value })} inputMode="numeric" />
+            </Field>
+            <Field label={t('Advertiser type')}>
+              <select className="select" value={s.olx_advertiser_type ?? 'business'} onChange={(e) => setS({ ...s, olx_advertiser_type: e.target.value })}>
+                <option value="business">{t('Business')}</option>
+                <option value="private">{t('Private person')}</option>
+              </select>
+            </Field>
+            <Field label={t('Contact name')}>
+              <input className="input" value={s.olx_contact_name ?? ''} onChange={(e) => setS({ ...s, olx_contact_name: e.target.value })} maxLength={100} />
+            </Field>
+            <Field label={t('Contact phone')}>
+              <input className="input" value={s.olx_contact_phone ?? ''} onChange={(e) => setS({ ...s, olx_contact_phone: e.target.value })} maxLength={30} />
+            </Field>
+          </div>
+        </>
+      )}
       <div className="row mt">
         <button className="btn btn-primary" onClick={save}>
           <Save /> {t('Save')}

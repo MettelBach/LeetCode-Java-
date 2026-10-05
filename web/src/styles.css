@@ -2323,3 +2323,72 @@ button.tag-chip {
 .tree-edit-row:hover {
   background: #f8f9fb;
 }
+
+/* ---------- Integrations catalog ---------- */
+button.status-row {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  padding: 7px 12px;
+}
+button.status-row:hover {
+  background: #e8eaed;
+}
+button.status-row.active {
+  background: #dcdfe3;
+}
+.status-count {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted, #8a9099);
+}
+.intg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 14px;
+}
+.intg-tile {
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: box-shadow 0.15s;
+}
+.intg-tile:hover {
+  box-shadow: 0 2px 10px rgba(30, 40, 60, 0.08);
+}
+.intg-tile.soon .mp-logo {
+  filter: grayscale(0.6);
+  opacity: 0.75;
+}
+.intg-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2f343a;
+}
+.intg-desc {
+  margin: 0;
+  color: #6b7178;
+  font-size: 13.5px;
+  line-height: 1.45;
+  flex: 1;
+}
+.intg-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 10px;
+  margin-top: 2px;
+}
+.intg-table td {
+  vertical-align: middle;
+}
+.intg-table .mp-logo {
+  border-radius: 8px;
+}

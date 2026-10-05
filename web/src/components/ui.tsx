@@ -277,19 +277,71 @@ export function StatusBadge({ name, color }: { name: string; color: string }) {
   );
 }
 
-const SOURCE_LETTER: Record<string, string> = { allegro: 'A', empik: 'E', kaufland: 'K', manual: '' };
+/** Brand colors and short marks of integrations (logos are drawn, no external images). */
+const BRANDS: Record<string, { bg: string; fg?: string; mark: string }> = {
+  allegro: { bg: '#ff5a00', mark: 'allegro' },
+  empik: { bg: '#e10a1a', mark: 'empik' },
+  kaufland: { bg: '#e10915', mark: 'K' },
+  olx: { bg: '#002f34', fg: '#23e5db', mark: 'OLX' },
+  amazon: { bg: '#232f3e', fg: '#ff9900', mark: 'a' },
+  ebay: { bg: '#fff', fg: '#e53238', mark: 'ebay' },
+  erli: { bg: '#5d2bff', mark: 'erli' },
+  temu: { bg: '#fb7701', mark: 'T' },
+  allegro_lokalnie: { bg: '#ff5a00', mark: 'AL' },
+  emag: { bg: '#005eb8', mark: 'eMAG' },
+  zalando: { bg: '#ff6900', mark: 'Z' },
+  aliexpress: { bg: '#e62e04', mark: 'AE' },
+  vinted: { bg: '#09b1ba', mark: 'V' },
+  woocommerce: { bg: '#7f54b3', mark: 'Woo' },
+  prestashop: { bg: '#df0067', mark: 'PS' },
+  shoper: { bg: '#00a0e3', mark: 'S' },
+  shopify: { bg: '#5e8e3e', mark: 'S' },
+  idosell: { bg: '#003b71', mark: 'IAI' },
+  magento: { bg: '#f26322', mark: 'M' },
+  sky_shop: { bg: '#2e7dd7', mark: 'SS' },
+  inpost: { bg: '#ffcd00', fg: '#1d1d1b', mark: 'InPost' },
+  allegro_delivery: { bg: '#ff5a00', mark: 'WzA' },
+  dpd: { bg: '#dc0032', mark: 'DPD' },
+  dhl: { bg: '#ffcc00', fg: '#d40511', mark: 'DHL' },
+  gls: { bg: '#061ab1', fg: '#ffd100', mark: 'GLS' },
+  pocztex: { bg: '#e30613', mark: 'PP' },
+  orlen: { bg: '#e2001a', mark: 'OP' },
+  ups: { bg: '#351c15', fg: '#ffb500', mark: 'UPS' },
+  fedex: { bg: '#4d148c', fg: '#ff6600', mark: 'FedEx' },
+  ksef: { bg: '#d4213d', mark: 'KSeF' },
+  fakturownia: { bg: '#2c6fb7', mark: 'F' },
+  infakt: { bg: '#00a651', mark: 'iF' },
+  wfirma: { bg: '#0d4ea6', mark: 'wF' },
+  ifirma: { bg: '#e94e1b', mark: 'iF' },
+  przelewy24: { bg: '#d13239', mark: 'P24' },
+  payu: { bg: '#a6c307', mark: 'PayU' },
+  tpay: { bg: '#1f4291', mark: 'tpay' },
+  ceneo: { bg: '#ff6c00', mark: 'C' },
+  google_merchant: { bg: '#4285f4', mark: 'G' },
+};
+
+const SOURCE_LETTER: Record<string, string> = { allegro: 'A', empik: 'E', kaufland: 'K', olx: 'O', manual: '' };
 
 export function SourceIcon({ source }: { source: string }) {
-  return <span className={`source-ico ${source}`}>{SOURCE_LETTER[source] ?? source.slice(0, 1).toUpperCase()}</span>;
+  const b = BRANDS[source];
+  return (
+    <span className={`source-ico ${source}`} style={b && !['allegro', 'empik', 'kaufland'].includes(source) ? { background: b.bg, color: b.fg ?? '#fff' } : undefined}>
+      {SOURCE_LETTER[source] ?? source.slice(0, 1).toUpperCase()}
+    </span>
+  );
 }
 
-export const MP_NAMES: Record<string, string> = { allegro: 'Allegro', empik: 'Empik', kaufland: 'Kaufland' };
+export const MP_NAMES: Record<string, string> = { allegro: 'Allegro', empik: 'Empik', kaufland: 'Kaufland', olx: 'OLX' };
 
 export function MarketplaceLogo({ type, size = 54 }: { type: string; size?: number }) {
-  const label = type === 'allegro' ? 'allegro' : type === 'empik' ? 'empik' : 'K';
+  const b = BRANDS[type] ?? { bg: '#9aa1a8', mark: type.slice(0, 2).toUpperCase() };
+  const fs = b.mark.length <= 1 ? size * 0.45 : b.mark.length <= 3 ? size * 0.3 : size * 0.24;
   return (
-    <span className={`mp-logo ${type}`} style={{ width: size, height: size, fontSize: type === 'kaufland' ? size * 0.45 : size * 0.24 }}>
-      {label}
+    <span
+      className={`mp-logo ${type}`}
+      style={{ width: size, height: size, fontSize: fs, background: b.bg, color: b.fg ?? '#fff', border: b.bg === '#fff' ? '1px solid var(--border)' : undefined }}
+    >
+      {b.mark}
     </span>
   );
 }

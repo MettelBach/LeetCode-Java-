@@ -122,7 +122,7 @@ function isActive(path: string, g: NavGroup) {
   return g.match.some((m) => path === m || path.startsWith(m + '/'));
 }
 
-const ACC_LETTERS: Record<string, string> = { allegro: 'Al', empik: 'Em', kaufland: 'Ka' };
+const ACC_LETTERS: Record<string, string> = { allegro: 'Al', empik: 'Em', kaufland: 'Ka', olx: 'OLX' };
 
 function Rail({ expanded }: { expanded: boolean }) {
   const nav = useNav();
@@ -199,7 +199,7 @@ function Rail({ expanded }: { expanded: boolean }) {
               className={`rail-account ${params.get('integration_id') === String(i.id) ? 'active' : ''}`}
               title={i.name}
             >
-              <span className="rail-account-box">{ACC_LETTERS[i.type]}</span>
+              <span className="rail-account-box">{ACC_LETTERS[i.type] ?? i.type.slice(0, 2)}</span>
               <span className="name">{i.name}</span>
             </Link>
           ))}
