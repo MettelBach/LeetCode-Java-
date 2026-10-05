@@ -268,6 +268,31 @@ export async function labelPdf(shipmentIds: number[]): Promise<Buffer> {
   return toBuffer(doc);
 }
 
+/**
+ * Product labels 50×30 mm for a thermal printer: name, SKU, price and a Code 128
+ * barcode of the EAN (or SKU). `copies` labels per product.
+ */
+export async function productLabelsPdf(items: { name: string; sku: string; ean: string; price: number | null; currency: string; copies: number }[]): Promise<Buffer> {
+  const W = 141.73;
+  const H = 85.04;
+  const doc = newDoc({ size: [W, H], margin: 4, autoFirstPage: false });
+  for (const it of items) {
+    for (let c = 0; c < Math.max(1, it.copies); c++) {
+      doc.addPage();
+      doc.font('b').fontSize(7).fillColor('#000').text(it.name, 6, 5, { width: W - 12, height: 18, ellipsis: true });
+      doc.font('r').fontSize(6).text(`SKU: ${it.sku || '-'}`, 6, 24, { width: W / 2 });
+      if (it.price !== null) doc.font('b').fontSize(8).text(`${money(it.price)} ${it.currency}`, W / 2, 23, { width: W / 2 - 6, align: 'right' });
+      const code = it.ean || it.sku;
+      if (code) {
+        drawBarcode(doc, code, 10, 36, W - 20, 32);
+        doc.font('r').fontSize(6).fillColor('#000').text(code, 6, 71, { width: W - 12, align: 'center' });
+      }
+    }
+  }
+  if (!items.length) doc.addPage();
+  return toBuffer(doc);
+}
+
 /** Order card / packing list printout for one or more orders. */
 export async function ordersPrintout(orderIds: number[], kind: 'order_card' | 'packing_list' | 'pick_list'): Promise<Buffer> {
   const doc = newDoc({ autoFirstPage: false });

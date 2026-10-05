@@ -18,7 +18,9 @@ import {
   setStock,
   stockIsDerived,
 } from '../services/stock.js';
+import { productLabelsPdf } from '../services/pdf.js';
 import { userName } from './auth.js';
+import { sendPdf } from './orders.js';
 
 export const productsRouter = Router();
 
@@ -237,7 +239,63 @@ function saveDetails(id: number, b: ProductInput, user: string, isNew: boolean) 
   }
 }
 
+/**
+ * Copies a product without stock: data, prices, texts, tags, extra fields and
+ * bundle composition; variants are copied too. SKUs get a "-KOPIA" suffix.
+ */
+function duplicateProduct(id: number, user: string, parentId: number | null = null): number {
+  const src = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+  if (!src) throw new HttpError(404, 'Product not found');
+  let sku = '';
+  if (src.sku) {
+    for (let n = 1; ; n++) {
+      sku = `${src.sku}-KOPIA${n > 1 ? n : ''}`;
+      if (!db.prepare('SELECT 1 FROM products WHERE sku = ? AND catalog_id IS ?').get(sku, src.catalog_id)) break;
+    }
+  }
+  const skip = new Set(['id', 'sku', 'ean', 'stock', 'created_at', 'updated_at', 'parent_id', 'name']);
+  const cols = Object.keys(src).filter((c) => !skip.has(c));
+  const r = db
+    .prepare(`INSERT INTO products (sku, ean, name, parent_id, stock, ${cols.join(', ')}) VALUES (?, '', ?, ?, 0, ${cols.map(() => '?').join(', ')})`)
+    .run(sku, parentId ? src.name : `${src.name} (kopia)`, parentId, ...cols.map((c) => src[c]));
+  const copy = Number(r.lastInsertRowid);
+  db.prepare('INSERT INTO product_prices (product_id, price_group_id, price) SELECT ?, price_group_id, price FROM product_prices WHERE product_id = ?').run(copy, id);
+  for (const [table, key] of [
+    ['product_tags', 'tag_id'],
+    ['product_extra_values', 'field_id, value'],
+    ['bundle_items', 'product_id, quantity'],
+  ] as const) {
+    const fk = table === 'bundle_items' ? 'bundle_id' : 'product_id';
+    db.prepare(`INSERT INTO ${table} (${fk}, ${key}) SELECT ?, ${key} FROM ${table} WHERE ${fk} = ?`).run(copy, id);
+  }
+  const textCols = (db.prepare(`SELECT name FROM pragma_table_info('product_texts') WHERE name != 'product_id' AND name != 'id'`).all() as { name: string }[]).map((c) => c.name);
+  db.prepare(`INSERT INTO product_texts (product_id, ${textCols.join(', ')}) SELECT ?, ${textCols.join(', ')} FROM product_texts WHERE product_id = ?`).run(copy, id);
+  for (const v of db.prepare('SELECT id FROM products WHERE parent_id = ?').all(id) as { id: number }[]) duplicateProduct(v.id, user, copy);
+  if (!parentId) logChange(copy, 'copy_of', '', String(id), user);
+  return copy;
+}
+
 /* ----------------------------------- list ----------------------------------- */
+
+/** Barcode labels of products (bulk action "Drukuj etykiety"). */
+productsRouter.get('/labels.pdf', async (req, res) => {
+  const ids = q.ints(req.query.ids).slice(0, 500);
+  const copies = Math.min(100, Math.max(1, q.int(req.query.copies) ?? 1));
+  const byStock = req.query.copies === 'stock';
+  const groupId = q.int(req.query.price_group_id) ?? defaultPriceGroupId();
+  const group = db.prepare('SELECT currency FROM price_groups WHERE id = ?').get(groupId) as { currency: string } | undefined;
+  const items: Parameters<typeof productLabelsPdf>[0] = [];
+  for (const id of ids) {
+    // A product with variants prints labels of its variants.
+    const rows = db.prepare('SELECT * FROM products WHERE (id = ? AND NOT EXISTS (SELECT 1 FROM products v WHERE v.parent_id = ?)) OR parent_id = ? ORDER BY id').all(id, id, id) as any[];
+    for (const p of rows) {
+      const price = (db.prepare('SELECT price FROM product_prices WHERE product_id = ? AND price_group_id = ?').get(p.id, groupId) as { price: number } | undefined)?.price ?? null;
+      const name = p.parent_id ? `${(db.prepare('SELECT name FROM products WHERE id = ?').get(p.parent_id) as any)?.name ?? ''} ${p.name}`.trim() : p.name;
+      items.push({ name, sku: p.sku, ean: p.ean, price, currency: group?.currency ?? 'PLN', copies: byStock ? Math.min(100, Math.max(0, p.stock)) : copies });
+    }
+  }
+  sendPdf(res, await productLabelsPdf(items.filter((i) => i.copies > 0)), 'etykiety.pdf');
+});
 
 productsRouter.get('/', (req, res) => {
   const catalog = q.int(req.query.catalog_id) ?? defaultCatalogId();
@@ -252,6 +310,11 @@ productsRouter.get('/', (req, res) => {
   const perPage = Math.min(500, Math.max(1, q.int(req.query.per_page) ?? 50));
   const w = ['p.parent_id IS NULL', 'p.catalog_id = ?'];
   const p: unknown[] = [catalog];
+  const onlyIds = q.ints(req.query.ids).slice(0, 500);
+  if (onlyIds.length) {
+    w.push(`p.id IN (${onlyIds.map(() => '?').join(',')})`);
+    p.push(...onlyIds);
+  }
   if (search) {
     const like = `%${search.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
     w.push(`(p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\' OR p.ean LIKE ? ESCAPE '\\' OR CAST(p.id AS TEXT) = ?
@@ -295,6 +358,51 @@ productsRouter.get('/', (req, res) => {
   if (req.query.no_images === '1') w.push(`p.images = '[]'`);
   if (req.query.has_offers === '1') w.push('EXISTS (SELECT 1 FROM offers o WHERE o.product_id = p.id OR o.product_id IN (SELECT id FROM products v WHERE v.parent_id = p.id))');
   if (req.query.has_offers === '0') w.push('NOT EXISTS (SELECT 1 FROM offers o WHERE o.product_id = p.id OR o.product_id IN (SELECT id FROM products v WHERE v.parent_id = p.id))');
+  if (q.num(req.query.stock_min) !== undefined) {
+    w.push(`${stockExpr} >= ?`);
+    p.push(q.num(req.query.stock_min));
+  }
+  if (q.num(req.query.stock_max) !== undefined) {
+    w.push(`${stockExpr} <= ?`);
+    p.push(q.num(req.query.stock_max));
+  }
+  if (req.query.no_description === '1') w.push(`p.description = '' AND NOT EXISTS (SELECT 1 FROM product_texts t WHERE t.product_id = p.id AND t.description != '')`);
+  const location = q.str(req.query.location);
+  if (location) {
+    w.push(`p.location LIKE ? ESCAPE '\\'`);
+    p.push(`%${location.replace(/[\\%_]/g, (m) => '\\' + m)}%`);
+  }
+  const added = (k: string, end: boolean) => {
+    const v = q.str(req.query[k]);
+    return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v} ${end ? '23:59:59' : '00:00:00'}` : undefined;
+  };
+  if (added('date_from', false)) {
+    w.push('p.created_at >= ?');
+    p.push(added('date_from', false));
+  }
+  if (added('date_to', true)) {
+    w.push('p.created_at <= ?');
+    p.push(added('date_to', true));
+  }
+  // Listed / not listed on a given marketplace account (like "Wystawione na…" in BaseLinker).
+  const onIntegration = q.int(req.query.integration_id);
+  if (onIntegration && (req.query.listed === '1' || req.query.listed === '0')) {
+    w.push(
+      `${req.query.listed === '0' ? 'NOT ' : ''}EXISTS (SELECT 1 FROM offers o WHERE o.integration_id = ? AND o.status != 'ended' AND (o.product_id = p.id OR o.product_id IN (SELECT id FROM products v WHERE v.parent_id = p.id)))`,
+    );
+    p.push(onIntegration);
+  }
+  const extraField = q.int(req.query.extra_field_id);
+  const extraValue = q.str(req.query.extra_value);
+  if (extraField) {
+    if (extraValue) {
+      w.push(`EXISTS (SELECT 1 FROM product_extra_values e WHERE e.product_id = p.id AND e.field_id = ? AND e.value LIKE ? ESCAPE '\\')`);
+      p.push(extraField, `%${extraValue.replace(/[\\%_]/g, (m) => '\\' + m)}%`);
+    } else {
+      w.push(`NOT EXISTS (SELECT 1 FROM product_extra_values e WHERE e.product_id = p.id AND e.field_id = ? AND e.value != '')`);
+      p.push(extraField);
+    }
+  }
   if (req.query.type === 'bundle') w.push('p.is_bundle = 1');
   if (req.query.type === 'variants') w.push('EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id)');
   if (req.query.type === 'simple') w.push('p.is_bundle = 0 AND NOT EXISTS (SELECT 1 FROM products v WHERE v.parent_id = p.id)');
@@ -829,6 +937,7 @@ productsRouter.post('/bulk', (req, res) => {
         'set_location',
         'set_weight',
         'set_min_stock',
+        'duplicate',
       ]),
       value: z.any().optional(),
       warehouse_id: z.number().int().optional(),
@@ -925,6 +1034,9 @@ productsRouter.post('/bulk', (req, res) => {
           case 'set_min_stock':
             if (!Number.isFinite(num) || num < 0) throw new HttpError(400, 'Invalid value');
             db.prepare('UPDATE products SET min_stock = ? WHERE id = ? OR parent_id = ?').run(Math.trunc(num), id, id);
+            break;
+          case 'duplicate':
+            duplicateProduct(id, user);
             break;
         }
         ok++;

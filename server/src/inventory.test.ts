@@ -209,4 +209,22 @@ describe('Inventory like BaseLinker', () => {
     expect(price.data.ok).toBe(1);
     expect((await api('GET', `/products/${kubek}`)).data.prices[pgB2B]).toBe(16.5);
   });
+
+  it('duplicates products, prints labels and filters by stock range, location and no description', async () => {
+    const dup = await api('POST', '/products/bulk', { ids: [kubek], action: 'duplicate' });
+    expect(dup.data.ok).toBe(1);
+    const copies = (await api('GET', `/products?catalog_id=${catalog}&search=KUB-1-KOPIA`)).data.rows;
+    expect(copies.length).toBe(1);
+    expect(copies[0].total_stock).toBe(0);
+    const card = (await api('GET', `/products/${copies[0].id}`)).data;
+    expect(card.prices[pgB2B]).toBe(16.5);
+    const pdf = await fetch(`${base}/products/labels.pdf?ids=${kubek},${copies[0].id}&copies=2`, { headers: { authorization: `Bearer ${t}` } });
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers.get('content-type')).toContain('pdf');
+    const ids = async (qs: string) => (await api('GET', `/products?catalog_id=${catalog}&${qs}`)).data.rows.map((r: any) => r.id);
+    expect(await ids('stock_max=0')).toContain(copies[0].id);
+    expect(await ids('stock_min=1')).not.toContain(copies[0].id);
+    expect((await ids(`ids=${kubek}`)).length).toBe(1);
+    expect((await api('GET', `/products?catalog_id=${catalog}&no_description=1&location=A&date_from=2020-01-01`)).status).toBe(200);
+  });
 });

@@ -701,6 +701,20 @@ export function DocumentEditor() {
     setItems(d.items.map((i: any) => ({ product_id: i.product_id, name: i.name, sku: i.sku, ean: i.ean, quantity: String(i.quantity), price: String(i.price || ''), stock: i.stock_now })));
   }, [existing.data]);
   const whId = wh || String(catalog?.default_warehouse_id ?? warehouses.data?.find((w) => w.is_default)?.id ?? '');
+  // "Warehouse document from selected" on the product list: lines come prefilled.
+  const preset = params.get('product_ids');
+  useEffect(() => {
+    if (editing || !preset || !catalog) return;
+    api.get<any>('/products', { catalog_id: catalog.id, ids: preset, expand: '1', per_page: 500 }).then((r) => {
+      const lines: any[] = [];
+      for (const p of r.rows ?? []) {
+        if (p.variants?.length) for (const v of p.variants) lines.push({ ...v, parent_name: p.name });
+        else lines.push(p);
+      }
+      for (const p of lines) add(p);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, catalog?.id]);
   const results = useQuery({
     queryKey: ['product-search', search, catalog?.id, whId],
     queryFn: () => api.get<any[]>('/products/search', { q: search, catalog_id: catalog?.id, warehouse_id: whId }),

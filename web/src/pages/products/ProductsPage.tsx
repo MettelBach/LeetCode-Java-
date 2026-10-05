@@ -1,6 +1,9 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Barcode,
   Boxes,
+  Copy,
+  FileText,
   Check,
   ChevronDown,
   ChevronRight,
@@ -23,16 +26,19 @@ import { api } from '../../api';
 import { DdItem, Dropdown, Empty, Field, Loading, Modal, Pager, useAction, useConfirm, useToast } from '../../components/ui';
 import { money } from '../../format';
 import { useT } from '../../i18n';
+import { useIntegrations } from '../../data';
 import { ListOnMarketplaceModal } from '../offers/ListModal';
 import {
   categoryOptions,
   useCategories,
   useCurrentCatalog,
+  useExtraFields,
   useManufacturers,
   usePriceGroups,
   useTags,
   useWarehouses,
   type Category,
+  DOC_TYPE_LABELS,
 } from './inventoryData';
 
 export { useCategories, useManufacturers } from './inventoryData';
@@ -198,7 +204,7 @@ export default function ProductsPage() {
   const [selected, setSelected] = useState<number[]>([]);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [search, setSearch] = useState(params.get('search') ?? '');
-  const [modal, setModal] = useState<null | 'import' | 'list' | 'filters' | 'columns' | BulkAction>(null);
+  const [modal, setModal] = useState<null | 'import' | 'list' | 'filters' | 'columns' | 'labels' | BulkAction>(null);
   const [cols, setCols] = useState<ColumnKey[]>(loadCols);
   const page = Number(params.get('page') ?? 1);
   const perPage = Number(params.get('per_page') ?? 50);
@@ -220,6 +226,7 @@ export default function ProductsPage() {
     has_offers: params.get('has_offers') ?? undefined,
     price_min: params.get('price_min') ?? undefined,
     price_max: params.get('price_max') ?? undefined,
+    ...Object.fromEntries(EXTRA_FILTER_KEYS.map((k) => [k, params.get(k) ?? undefined])),
     price_group_id: group?.id,
     sort: params.get('sort') ?? 'id',
     dir: params.get('dir') ?? 'desc',
@@ -245,7 +252,7 @@ export default function ProductsPage() {
   const sortBy = (s: string) => setParam({ sort: s, dir: query.sort === s && query.dir === 'asc' ? 'desc' : 'asc' });
   const arrow = (s: string) => (query.sort === s ? (query.dir === 'asc' ? ' ▲' : ' ▼') : '');
   const show = (c: ColumnKey) => cols.includes(c);
-  const filterCount = ['manufacturer_id', 'tag_id', 'stock', 'type', 'has_ean', 'no_images', 'has_offers', 'price_min', 'price_max'].filter((k) => params.get(k)).length;
+  const filterCount = PRODUCT_FILTER_KEYS.filter((k) => params.get(k) && k !== 'extra_value' && k !== 'listed' && k !== 'stock_max' && k !== 'date_to').length;
   const catPath = useMemo(() => new Map(categoryOptions(cats.data ?? []).map((c) => [c.id, c.path])), [cats.data]);
 
   const savePrice = (id: number, v: number) => run(() => api.put(`/products/${id}`, { prices: { [group!.id]: v } }), t('Saved')).then(refresh);
@@ -473,6 +480,29 @@ export default function ProductsPage() {
                   </DdItem>
                 ))}
                 <div className="dd-sep" />
+                <DdItem
+                  icon={<Copy size={16} />}
+                  onClick={async () => {
+                    close();
+                    const r = await run(() => api.post<any>('/products/bulk', { ids: selected, action: 'duplicate' }));
+                    if (r) {
+                      toast(r.errors.length ? t('{ok} done, {e} with errors: {msg}', { ok: r.ok, e: r.errors.length, msg: r.errors[0].message }) : t('Copies created: {n}', { n: r.ok }), r.errors.length ? 'error' : 'success');
+                      refresh();
+                    }
+                  }}
+                >
+                  {t('Duplicate')}
+                </DdItem>
+                <DdItem icon={<Barcode size={16} />} onClick={() => (close(), setModal('labels'))}>
+                  {t('Print barcode labels')}
+                </DdItem>
+                <div className="dd-head">{t('Warehouse document from selected')}</div>
+                {(['PZ', 'WZ', 'RW', 'PW', 'MM'] as const).map((d) => (
+                  <DdItem key={d} icon={<FileText size={16} />} onClick={() => (close(), nav(`/products/documents/new?type=${d}&product_ids=${selected.join(',')}`))}>
+                    {d} — {t(DOC_TYPE_LABELS[d] ?? d)}
+                  </DdItem>
+                ))}
+                <div className="dd-sep" />
                 <DdItem icon={<Store size={16} />} onClick={() => (close(), setModal('list'))}>
                   {t('List on marketplace')}
                 </DdItem>
@@ -567,6 +597,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
+      {modal === 'labels' && <LabelsModal ids={selected} priceGroupId={group?.id} onClose={() => setModal(null)} />}
       {modal === 'list' && <ListOnMarketplaceModal productIds={selected} onClose={() => setModal(null)} onDone={() => (setModal(null), refresh())} />}
       {modal === 'import' && <ImportWizard catalogId={catalog.id} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'filters' && <FiltersModal params={params} onApply={(patch) => (setParam(patch), setModal(null))} onClose={() => setModal(null)} />}
@@ -594,6 +625,14 @@ export default function ProductsPage() {
 
 /* ------------------------------- active filters ------------------------------- */
 
+const CHIP_KEYS: Record<string, Record<string, null>> = {
+  price: { price_min: null, price_max: null },
+  stock_range: { stock_min: null, stock_max: null },
+  added: { date_from: null, date_to: null },
+  listed: { integration_id: null, listed: null },
+  extra: { extra_field_id: null, extra_value: null },
+};
+
 function ActiveFilters({ params, setParam, mans, tags }: { params: URLSearchParams; setParam: (p: Record<string, string | null>) => void; mans?: any[]; tags?: any[] }) {
   const t = useT();
   const STOCK: Record<string, string> = { in: 'In stock', out: 'Out of stock', low: 'Low stock', negative: 'Negative stock', reserved: 'Reserved' };
@@ -608,13 +647,19 @@ function ActiveFilters({ params, setParam, mans, tags }: { params: URLSearchPara
   if (params.get('no_images') === '1') chips.push(['no_images', t('Without images')]);
   if (params.get('has_offers')) chips.push(['has_offers', params.get('has_offers') === '1' ? t('Listed on marketplaces') : t('Not listed')]);
   if (params.get('price_min') || params.get('price_max')) chips.push(['price', `${params.get('price_min') ?? '0'} – ${params.get('price_max') ?? '∞'} zł`]);
+  if (params.get('stock_min') || params.get('stock_max')) chips.push(['stock_range', `${t('Stock')}: ${params.get('stock_min') ?? '…'} – ${params.get('stock_max') ?? '…'}`]);
+  if (params.get('location')) chips.push(['location', `${t('Location')}: ${params.get('location')}`]);
+  if (params.get('no_description') === '1') chips.push(['no_description', t('Without description')]);
+  if (params.get('date_from') || params.get('date_to')) chips.push(['added', `${t('Added')}: ${params.get('date_from') ?? '…'} – ${params.get('date_to') ?? '…'}`]);
+  if (params.get('integration_id') && params.get('listed')) chips.push(['listed', `${params.get('listed') === '1' ? t('Listed') : t('Not listed')} (ID ${params.get('integration_id')})`]);
+  if (params.get('extra_field_id')) chips.push(['extra', `${t('Additional field')}: ${params.get('extra_value') || t('empty')}`]);
   if (!chips.length) return null;
   return (
     <div className="filter-chips">
       {chips.map(([k, label]) => (
         <span key={k} className="filter-chip">
           {label}
-          <button onClick={() => setParam(k === 'price' ? { price_min: null, price_max: null } : { [k]: null })} aria-label={t('Remove filter')}>
+          <button onClick={() => setParam(CHIP_KEYS[k] ?? { [k]: null })} aria-label={t('Remove filter')}>
             <X size={14} />
           </button>
         </span>
@@ -623,11 +668,16 @@ function ActiveFilters({ params, setParam, mans, tags }: { params: URLSearchPara
   );
 }
 
+const EXTRA_FILTER_KEYS = ['stock_min', 'stock_max', 'location', 'no_description', 'date_from', 'date_to', 'integration_id', 'listed', 'extra_field_id', 'extra_value'];
+const PRODUCT_FILTER_KEYS = ['manufacturer_id', 'tag_id', 'stock', 'type', 'has_ean', 'no_images', 'has_offers', 'price_min', 'price_max', ...EXTRA_FILTER_KEYS];
+
 function FiltersModal({ params, onApply, onClose }: { params: URLSearchParams; onApply: (p: Record<string, string | null>) => void; onClose: () => void }) {
   const t = useT();
   const mans = useManufacturers();
   const tags = useTags();
-  const keys = ['manufacturer_id', 'tag_id', 'stock', 'type', 'has_ean', 'no_images', 'has_offers', 'price_min', 'price_max'];
+  const integrations = useIntegrations();
+  const extra = useExtraFields();
+  const keys = PRODUCT_FILTER_KEYS;
   const [f, setF] = useState<Record<string, string>>(Object.fromEntries(keys.map((k) => [k, params.get(k) ?? ''])));
   const sel = (k: string, opts: [string, string][]) => (
     <select className="select" value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })}>
@@ -697,7 +747,78 @@ function FiltersModal({ params, onApply, onClose }: { params: URLSearchParams; o
         <Field label={t('Price to')}>
           <input className="input" value={f.price_max} onChange={(e) => setF({ ...f, price_max: e.target.value })} inputMode="decimal" />
         </Field>
+        <Field label={t('Stock from')}>
+          <input className="input" value={f.stock_min} onChange={(e) => setF({ ...f, stock_min: e.target.value })} inputMode="numeric" />
+        </Field>
+        <Field label={t('Stock to')}>
+          <input className="input" value={f.stock_max} onChange={(e) => setF({ ...f, stock_max: e.target.value })} inputMode="numeric" />
+        </Field>
+        <Field label={t('Marketplace account')}>
+          {sel('integration_id', [['', t('Any')], ...((integrations.data ?? []).map((i) => [String(i.id), i.name]) as [string, string][])])}
+        </Field>
+        <Field label={t('On this account')}>
+          {sel('listed', [
+            ['', t('Any')],
+            ['1', t('Listed')],
+            ['0', t('Not listed')],
+          ])}
+        </Field>
+        <Field label={t('Location')}>
+          <input className="input" value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} placeholder="A-01" />
+        </Field>
+        <Field label=" ">
+          <label className="check-label" style={{ height: 40 }}>
+            <input type="checkbox" checked={f.no_description === '1'} onChange={(e) => setF({ ...f, no_description: e.target.checked ? '1' : '' })} /> {t('Without description')}
+          </label>
+        </Field>
+        <Field label={t('Added from')}>
+          <input className="input" type="date" value={f.date_from} onChange={(e) => setF({ ...f, date_from: e.target.value })} />
+        </Field>
+        <Field label={t('Added to')}>
+          <input className="input" type="date" value={f.date_to} onChange={(e) => setF({ ...f, date_to: e.target.value })} />
+        </Field>
+        {!!extra.data?.length && (
+          <>
+            <Field label={t('Additional field')}>{sel('extra_field_id', [['', t('Any')], ...((extra.data ?? []).map((x) => [String(x.id), x.name]) as [string, string][])])}</Field>
+            <Field label={t('Value contains')} help={t('Empty = products without a value')}>
+              <input className="input" value={f.extra_value} onChange={(e) => setF({ ...f, extra_value: e.target.value })} disabled={!f.extra_field_id} />
+            </Field>
+          </>
+        )}
       </div>
+    </Modal>
+  );
+}
+
+/** Barcode labels 50×30 mm: a fixed number per product or as many as the stock. */
+function LabelsModal({ ids, priceGroupId, onClose }: { ids: number[]; priceGroupId?: number; onClose: () => void }) {
+  const t = useT();
+  const [copies, setCopies] = useState('1');
+  const [byStock, setByStock] = useState(false);
+  const open = () => {
+    void api.openPdf('/products/labels.pdf', { ids: ids.join(','), copies: byStock ? 'stock' : copies, price_group_id: priceGroupId });
+    onClose();
+  };
+  return (
+    <Modal
+      title={t('Print barcode labels')}
+      onClose={onClose}
+      footer={
+        <button className="btn btn-primary" onClick={open}>
+          <Barcode size={16} /> {t('Print')}
+        </button>
+      }
+    >
+      <p className="help-text" style={{ marginTop: 0 }}>
+        {t('Labels 50×30 mm with name, SKU, price and EAN barcode (SKU when there is no EAN). Products with variants print labels of the variants.')}
+      </p>
+      <label className="check-label mb">
+        <input type="radio" checked={!byStock} onChange={() => setByStock(false)} /> {t('Labels per product')}
+        <input className="input input-sm" style={{ width: 70, marginLeft: 8 }} value={copies} onChange={(e) => setCopies(e.target.value.replace(/\D/g, '') || '1')} disabled={byStock} />
+      </label>
+      <label className="check-label">
+        <input type="radio" checked={byStock} onChange={() => setByStock(true)} /> {t('As many as the stock (max 100 per product)')}
+      </label>
     </Modal>
   );
 }
