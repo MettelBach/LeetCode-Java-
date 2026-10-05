@@ -26,6 +26,8 @@ const HISTORY_LABELS: { re: RegExp; label: string; tr?: number[] }[] = [
   { re: /^Order restored$/, label: 'Order restored' },
   { re: /^Order archived$/, label: 'Order archived' },
   { re: /^Order removed from archive$/, label: 'Order removed from archive' },
+  { re: /^Order locked$/, label: 'Order locked' },
+  { re: /^Order unlocked$/, label: 'Order unlocked' },
   { re: /^Order data changed: (.*)$/, label: 'Order data changed: {a}' },
   { re: /^Product added: (\d+(?:\.\d+)?)x (.*)$/, label: 'Product added: {a}x {b}' },
   { re: /^Product edited: (.*)$/, label: 'Product edited: {a}' },

@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { db, platformDb, runWithTenant } from '../db/index.js';
-import { HttpError, idParam, nowSql, q } from '../lib/http.js';
+import { HttpError, idParam, nowSql, q, likeContains } from '../lib/http.js';
 import { filtersFromQuery, listOrders } from '../services/order-query.js';
 import { changeStatus, createOrder, getOrderFull, setPayment } from '../services/orders.js';
 import { accelOption, accountAccelerations, audit, type AccountRow } from '../services/platform.js';
@@ -184,8 +184,8 @@ restApiRouter.get('/products', (req, res) => {
   const p: unknown[] = [];
   const search = q.str(req.query.search);
   if (search) {
-    w.push('(name LIKE ? OR sku = ? OR ean = ?)');
-    p.push(`%${search}%`, search, search);
+    w.push(`(name LIKE ? ESCAPE '!' OR sku = ? OR ean = ?)`);
+    p.push(likeContains(String(search)), search, search);
   }
   const catalog = q.int(req.query.catalog_id);
   if (catalog) {

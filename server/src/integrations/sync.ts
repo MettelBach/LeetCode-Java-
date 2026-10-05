@@ -3,11 +3,12 @@ import { sendLifecycleMails } from '../services/lifecycle-mail.js';
 import { openJson, sealJson } from '../lib/secrets.js';
 import { availableStock } from '../services/stock.js';
 import { backupAll } from '../services/backup.js';
+import { isValidDateTime } from '../lib/dates.js';
 import { config } from '../config.js';
 import { currentAccountId, db, parseJson, runWithTenant } from '../db/index.js';
 import { HttpError, notFound } from '../lib/http.js';
 import { onEvent } from '../services/events.js';
-import { addHistory, changeStatus, createOrder, getOrder, statusIdByKey } from '../services/orders.js';
+import { addHistory, changeStatus, createOrder, getOrder, setPayment, statusIdByKey } from '../services/orders.js';
 import {
   accelOption,
   accountAccelerations,
@@ -114,10 +115,8 @@ export async function syncOrders(id: number) {
           patch.push(`marketplace status: ${mo.external_status}`);
         }
         if (typeof mo.paid_amount === 'number' && mo.paid_amount > existing.paid_amount) {
-          db.prepare(`UPDATE orders SET paid_amount = ?, payment_date = COALESCE(payment_date, datetime('now')) WHERE id = ?`).run(
-            mo.paid_amount,
-            existing.id,
-          );
+          // Through setPayment: payment history and the "order paid" automation.
+          setPayment(existing.id, mo.paid_amount, integration.name, isValidDateTime(mo.payment_date) ? mo.payment_date : undefined, integration.name);
           patch.push(`paid ${mo.paid_amount}`);
         }
         if (mo.canceled && integration.settings.sync_cancel) {

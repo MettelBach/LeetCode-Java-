@@ -592,4 +592,24 @@ export const migrations: string[] = [
   ALTER TABLE shipments ADD COLUMN integration_id INTEGER REFERENCES integrations(id) ON DELETE SET NULL;
   ALTER TABLE shipments ADD COLUMN external_id TEXT NOT NULL DEFAULT '';
   `,
+  // 4: payment history, exchange rates on documents, order lock.
+  `
+  CREATE TABLE order_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    amount REAL NOT NULL,
+    paid_total REAL NOT NULL,
+    payment_date TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX ix_order_payments_order ON order_payments(order_id);
+  INSERT INTO order_payments (order_id, amount, paid_total, payment_date, comment, user_name)
+    SELECT id, paid_amount, paid_amount, COALESCE(payment_date, date_add), 'Payment before history', 'System' FROM orders WHERE paid_amount > 0;
+  ALTER TABLE invoices ADD COLUMN exchange_rate REAL;
+  ALTER TABLE invoices ADD COLUMN exchange_rate_date TEXT NOT NULL DEFAULT '';
+  ALTER TABLE invoices ADD COLUMN exchange_rate_table TEXT NOT NULL DEFAULT '';
+  ALTER TABLE orders ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

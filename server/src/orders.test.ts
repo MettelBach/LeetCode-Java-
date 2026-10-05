@@ -179,4 +179,52 @@ describe('Order stock logic', () => {
     expect(card.history.some((h: any) => h.message === 'Stock reserved')).toBe(true);
     await api('PUT', '/settings/orders', { stock_deduct: 'on_create', stock_reserve: false });
   });
+
+  it('invoices: valid dates, numbers follow dates, corrections chain, receipt rules, lock', async () => {
+    const id = await order([{ product_id: kubek, name: 'Kubek', quantity: 2, price: 20 }]);
+    expect((await api('POST', `/orders/${id}/documents`, { type: 'invoice', issue_date: '2099-99-99' })).status).toBe(400);
+    const inv = await api('POST', `/orders/${id}/documents`, { type: 'invoice', issue_date: '2026-10-05' });
+    expect(inv.status).toBe(200);
+    // A later document cannot be dated before the last one of the series.
+    const id2 = await order([{ product_id: kubek, name: 'Kubek', quantity: 1, price: 20 }]);
+    expect((await api('POST', `/orders/${id2}/documents`, { type: 'invoice', issue_date: '2026-10-01' })).status).toBe(400);
+    // A receipt after an invoice is refused; an invoice to a receipt refers to it.
+    expect((await api('POST', `/orders/${id}/documents`, { type: 'receipt' })).status).toBe(409);
+    const rec = await api('POST', `/orders/${id2}/documents`, { type: 'receipt', issue_date: '2026-10-05' });
+    const inv2 = (await api('POST', `/orders/${id2}/documents`, { type: 'invoice', issue_date: '2026-10-05' })).data.id;
+    const recNo = (await api('GET', `/invoices/${rec.data.id}`)).data.number;
+    expect((await api('GET', `/invoices/${inv2}`)).data.notes).toContain(recNo);
+    // Products and prices are fixed after the invoice.
+    const line = (await api('GET', `/orders/${id}`)).data.items[0].id;
+    expect((await api('PUT', `/orders/${id}/items/${line}`, { quantity: 5 })).status).toBe(409);
+    expect((await api('PUT', `/orders/${id}/items/${line}`, { location: 'A-1' })).status).toBe(200);
+    expect((await api('PUT', `/orders/${id}`, { delivery_price: 15 })).status).toBe(409);
+    // Corrections: the second one is counted from the first one, not from the invoice.
+    const c1 = (await api('POST', `/invoices/${inv.data.id}/correction`, { reason: 'Rabat', items: [{ name: 'Kubek', quantity: 2, price_gross: 15, tax_rate: 23 }] })).data.id;
+    expect((await api('GET', `/invoices/${c1}`)).data.total_gross).toBe(-10);
+    const c2 = (await api('POST', `/invoices/${c1}/correction`, { reason: 'Zwrot', items: [{ name: 'Kubek', quantity: 1, price_gross: 15, tax_rate: 23 }] })).data.id;
+    const c2v = (await api('GET', `/invoices/${c2}`)).data;
+    expect(c2v.total_gross).toBe(-15);
+    expect(c2v.corrected.id).toBe(inv.data.id);
+    expect(c2v.corrected.items[0].price_gross).toBe(15);
+  });
+
+  it('payment history, manual lock and search with % _', async () => {
+    const id = await order([{ name: 'Usługa 100%_extra', quantity: 1, price: 50 }]);
+    expect((await api('POST', `/orders/${id}/payment`, { paid_amount: 20, payment_date: '2026-13-01' })).status).toBe(400);
+    await api('POST', `/orders/${id}/payment`, { paid_amount: 20 });
+    await api('POST', `/orders/${id}/payment`, { paid_amount: 50, comment: 'Przelew' });
+    const card = (await api('GET', `/orders/${id}`)).data;
+    expect(card.payments.map((p: any) => p.amount)).toEqual([30, 20]);
+    await api('POST', `/orders/${id}/lock`, { locked: true });
+    expect((await api('POST', `/orders/${id}/items`, { name: 'X', quantity: 1, price: 1 })).status).toBe(409);
+    await api('POST', `/orders/${id}/lock`, { locked: false });
+    expect((await api('POST', `/orders/${id}/items`, { name: 'X', quantity: 1, price: 1 })).status).toBe(200);
+    // "%" and "_" are searched literally.
+    const all = (await api('GET', '/orders?search=' + encodeURIComponent('%'))).data.rows.map((r: any) => r.id);
+    expect(all).toEqual([id]);
+    expect((await api('POST', '/orders', { items: [{ name: 'Rabat', quantity: 1, price: -10 }] })).status).toBe(400);
+    expect((await api('POST', '/orders', { status_id: 99999 })).status).toBe(400);
+    expect((await api('POST', '/orders/99999/note', { message: 'x' })).status).toBe(404);
+  });
 });

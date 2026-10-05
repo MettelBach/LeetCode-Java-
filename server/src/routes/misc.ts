@@ -2,7 +2,7 @@ import { SMTP_PORTS } from '../lib/net.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { db, getSetting, parseJson, platformDb, runWithTenant, setSetting } from '../db/index.js';
-import { HttpError, idParam, q } from '../lib/http.js';
+import { HttpError, idParam, q, likeContains } from '../lib/http.js';
 import { ACTION_TYPES, CONDITION_FIELDS, EVENTS, runRulesFor } from '../services/automation.js';
 import { orderTotal } from '../services/orders.js';
 import { assertPublicHttpsUrl } from '../lib/net.js';
@@ -298,18 +298,18 @@ miscRouter.get('/search', (req, res) => {
     res.json({ orders: [], products: [] });
     return;
   }
-  const like = `%${s}%`;
+  const like = likeContains(String(s));
   const orders = db
     .prepare(
       `SELECT o.id, o.external_id, o.delivery_fullname, o.email, o.source, o.date_add, s.name status_name, s.color status_color
        FROM orders o JOIN order_statuses s ON s.id = o.status_id
-       WHERE o.deleted = 0 AND (CAST(o.id AS TEXT) = ? OR o.external_id LIKE ? OR o.delivery_fullname LIKE ? OR o.email LIKE ? OR o.user_login LIKE ? OR o.phone LIKE ?
+       WHERE o.deleted = 0 AND (CAST(o.id AS TEXT) = ? OR o.external_id LIKE ? ESCAPE '!' OR o.delivery_fullname LIKE ? ESCAPE '!' OR o.email LIKE ? ESCAPE '!' OR o.user_login LIKE ? ESCAPE '!' OR o.phone LIKE ? ESCAPE '!'
          OR EXISTS (SELECT 1 FROM shipments x WHERE x.order_id = o.id AND x.tracking_number = ?))
        ORDER BY o.id DESC LIMIT 8`,
     )
     .all(s, like, like, like, like, like, s);
   const products = db
-    .prepare('SELECT id, name, sku, ean, stock, parent_id FROM products WHERE name LIKE ? OR sku LIKE ? OR ean = ? ORDER BY name LIMIT 8')
+    .prepare(`SELECT id, name, sku, ean, stock, parent_id FROM products WHERE name LIKE ? ESCAPE '!' OR sku LIKE ? ESCAPE '!' OR ean = ? ORDER BY name LIMIT 8`)
     .all(like, like, s);
   res.json({ orders, products });
 });

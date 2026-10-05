@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db, parseJson, tx } from '../db/index.js';
-import { HttpError, idParam, q } from '../lib/http.js';
+import { HttpError, idParam, q, likeContains } from '../lib/http.js';
 import { adjustStock, defaultCatalogId, stockIsDerived, updateAverageCost, warehouseStock } from '../services/stock.js';
 import { requireAdmin, userName } from './auth.js';
 
@@ -360,8 +360,8 @@ docsRouter.get('/', (req, res) => {
     p.push(q.str(req.query.date_to));
   }
   if (q.str(req.query.search)) {
-    w.push('(d.number LIKE ? OR d.contractor LIKE ? OR d.notes LIKE ?)');
-    const like = `%${q.str(req.query.search)}%`;
+    w.push(`(d.number LIKE ? ESCAPE '!' OR d.contractor LIKE ? ESCAPE '!' OR d.notes LIKE ? ESCAPE '!')`);
+    const like = likeContains(String(q.str(req.query.search)));
     p.push(like, like, like);
   }
   res.json(

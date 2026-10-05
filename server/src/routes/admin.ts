@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { db, parseJson, platformDb, runWithTenant } from '../db/index.js';
-import { HttpError, idParam, nowSql, q } from '../lib/http.js';
+import { HttpError, idParam, nowSql, q, likeContains } from '../lib/http.js';
 import {
   accountAccelerations,
   accountBalance,
@@ -126,8 +126,8 @@ adminRouter.get('/accounts', (req, res) => {
   const p: unknown[] = [];
   const search = q.str(req.query.search);
   if (search) {
-    const like = `%${search}%`;
-    w.push(`(a.name LIKE ? OR a.nip LIKE ? OR CAST(a.id AS TEXT) = ? OR EXISTS (SELECT 1 FROM users u WHERE u.account_id = a.id AND (u.email LIKE ? OR u.name LIKE ?)))`);
+    const like = likeContains(String(search));
+    w.push(`(a.name LIKE ? ESCAPE '!' OR a.nip LIKE ? ESCAPE '!' OR CAST(a.id AS TEXT) = ? OR EXISTS (SELECT 1 FROM users u WHERE u.account_id = a.id AND (u.email LIKE ? ESCAPE '!' OR u.name LIKE ? ESCAPE '!')))`);
     p.push(like, like, search, like, like);
   }
   if (q.str(req.query.status)) {
@@ -314,8 +314,8 @@ adminRouter.get('/tickets', (req, res) => {
   }
   const search = q.str(req.query.search);
   if (search) {
-    w.push('(t.subject LIKE ? OR a.name LIKE ? OR CAST(t.id AS TEXT) = ?)');
-    p.push(`%${search}%`, `%${search}%`, search);
+    w.push(`(t.subject LIKE ? ESCAPE '!' OR a.name LIKE ? ESCAPE '!' OR CAST(t.id AS TEXT) = ?)`);
+    p.push(likeContains(String(search)), likeContains(String(search)), search);
   }
   res.json(
     platformDb

@@ -77,6 +77,9 @@ function fieldValue(field: string, orderId: number, payload: EventPayload): any 
   switch (field) {
     case 'from_status_id':
       return payload.fromStatusId ?? null;
+    case 'status_id':
+      // Rules run after the event: another rule may have moved the order on already.
+      return payload.toStatusId ?? o.status_id;
     case 'payment_status': {
       const total = orderTotal(orderId);
       if (o.paid_amount <= 0) return 'unpaid';
@@ -155,21 +158,23 @@ async function runAction(a: Action, orderId: number, payload: EventPayload, rule
   const user = 'Automatic action';
   const p = a.params ?? {};
   switch (a.type) {
-    case 'set_status':
+    case 'set_status': {
       changeStatus(orderId, Number(p.status_id), user, meta);
-      return `status → ${p.status_id}`;
+      const st = db.prepare('SELECT name FROM order_statuses WHERE id = ?').get(Number(p.status_id)) as { name: string } | undefined;
+      return `status → ${st?.name ?? p.status_id}`;
+    }
     case 'send_email':
       return `email: ${await sendTemplateEmail(orderId, Number(p.template_id), user)}`;
     case 'issue_invoice':
       try {
-        issueForOrder(orderId, 'invoice', { series_id: p.series_id ? Number(p.series_id) : undefined, user });
+        issueForOrder(orderId, 'invoice', { series_id: p.series_id ? Number(p.series_id) : undefined, user, meta });
         return 'invoice issued';
       } catch (e: any) {
         return `invoice skipped: ${e.message}`;
       }
     case 'issue_receipt':
       try {
-        issueForOrder(orderId, 'receipt', { series_id: p.series_id ? Number(p.series_id) : undefined, user });
+        issueForOrder(orderId, 'receipt', { series_id: p.series_id ? Number(p.series_id) : undefined, user, meta });
         return 'receipt issued';
       } catch (e: any) {
         return `receipt skipped: ${e.message}`;

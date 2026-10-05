@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db, parseJson } from '../db/index.js';
-import { HttpError, idParam, q } from '../lib/http.js';
+import { HttpError, idParam, q, likeContains } from '../lib/http.js';
 import { sendTrackingToSource } from '../integrations/sync.js';
 import { computeTotals, createCorrection, createInvoice, deleteInvoice, getInvoice } from '../services/invoices.js';
 import { invoicePdf, labelPdf, returnPdf } from '../services/pdf.js';
@@ -29,8 +29,8 @@ shipmentsRouter.get('/', (req, res) => {
     p.push(status);
   }
   if (search) {
-    w.push('(s.tracking_number LIKE ? OR CAST(s.order_id AS TEXT) = ? OR o.delivery_fullname LIKE ?)');
-    p.push(`%${search}%`, search, `%${search}%`);
+    w.push(`(s.tracking_number LIKE ? ESCAPE '!' OR CAST(s.order_id AS TEXT) = ? OR o.delivery_fullname LIKE ? ESCAPE '!')`);
+    p.push(likeContains(String(search)), search, likeContains(String(search)));
   }
   if (q.str(req.query.date_from)) {
     w.push('s.created_at >= ?');
@@ -109,8 +109,8 @@ invoicesRouter.get('/', (req, res) => {
     p.push(type);
   }
   if (search) {
-    w.push(`(v.number LIKE ? OR CAST(v.order_id AS TEXT) = ? OR v.buyer LIKE ?)`);
-    p.push(`%${search}%`, search, `%${search}%`);
+    w.push(`(v.number LIKE ? ESCAPE '!' OR CAST(v.order_id AS TEXT) = ? OR v.buyer LIKE ? ESCAPE '!')`);
+    p.push(likeContains(String(search)), search, likeContains(String(search)));
   }
   if (q.str(req.query.date_from)) {
     w.push('v.issue_date >= ?');
@@ -252,8 +252,8 @@ returnsRouter.get('/', (req, res) => {
     p.push(status);
   }
   if (search) {
-    w.push('(CAST(r.order_id AS TEXT) = ? OR CAST(r.id AS TEXT) = ? OR r.buyer_name LIKE ? OR r.buyer_email LIKE ?)');
-    p.push(search, search, `%${search}%`, `%${search}%`);
+    w.push(`(CAST(r.order_id AS TEXT) = ? OR CAST(r.id AS TEXT) = ? OR r.buyer_name LIKE ? ESCAPE '!' OR r.buyer_email LIKE ? ESCAPE '!')`);
+    p.push(search, search, likeContains(String(search)), likeContains(String(search)));
   }
   const page = Math.max(1, q.int(req.query.page) ?? 1);
   const perPage = Math.min(500, q.int(req.query.per_page) ?? 50);

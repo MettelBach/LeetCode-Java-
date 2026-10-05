@@ -1,4 +1,5 @@
 import { db, getSetting, parseJson, tx } from '../db/index.js';
+import { isValidDateTime, warsawNow } from '../lib/dates.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
 import { deductOrderStock, findProduct, orderLineChanged, releaseOrderStock, reserveOrderStock, restoreOrderStock, transferOrderStock } from './stock.js';
@@ -223,6 +224,18 @@ export function createOrder(input: OrderInput, user = 'System'): number {
       .run(...vals);
     const orderId = Number(r.lastInsertRowid);
     for (const it of input.items ?? []) insertItem(orderId, it, settings.default_tax_rate ?? 23);
+    if (Number(data.paid_amount) > 0) {
+      const when = data.payment_date || warsawNow();
+      db.prepare('UPDATE orders SET payment_date = ? WHERE id = ?').run(when, orderId);
+      db.prepare('INSERT INTO order_payments (order_id, amount, paid_total, payment_date, comment, user_name) VALUES (?, ?, ?, ?, ?, ?)').run(
+        orderId,
+        round2(data.paid_amount),
+        round2(data.paid_amount),
+        when,
+        input.source && input.source !== 'manual' ? input.source : '',
+        user,
+      );
+    }
     const src = input.source && input.source !== 'manual' ? input.source : null;
     addHistory(orderId, src ? `Order downloaded from ${src}` : 'Order created', 'create', user);
     reconcileOrderStock(orderId, user);
@@ -247,6 +260,7 @@ export function updateOrder(id: number, patch: Record<string, any>, user = 'Syst
     changes.push(f);
   }
   if (!changes.length) return;
+  if (data.delivery_price !== undefined || data.currency !== undefined) assertNotLocked(id);
   const set = Object.keys(data)
     .map((k) => `${k} = ?`)
     .join(', ');
@@ -274,22 +288,45 @@ export function changeStatus(id: number, statusId: number, user = 'System', meta
   return true;
 }
 
-export function setPayment(id: number, amount: number, user = 'System', date?: string) {
+/**
+ * Sets the paid amount of an order and records the change in the payment
+ * history. `order_paid` fires when the order becomes fully paid.
+ */
+export function setPayment(id: number, amount: number, user = 'System', date?: string, comment = '') {
   const o = getOrder(id);
+  if (date !== undefined && date !== '' && !isValidDateTime(date)) throw new HttpError(400, 'Invalid payment date');
   const total = orderTotal(id);
+  const paid = round2(amount);
+  if (paid === round2(o.paid_amount)) return;
   const wasPaid = o.paid_amount >= total - 0.001 && o.paid_amount > 0;
-  db.prepare(`UPDATE orders SET paid_amount = ?, payment_date = ?, updated_at = datetime('now') WHERE id = ?`).run(
-    round2(amount),
-    amount > 0 ? (date ?? new Date().toISOString().replace('T', ' ').slice(0, 19)) : null,
-    id,
-  );
-  addHistory(id, `Payment set: ${round2(amount).toFixed(2)} ${o.currency} of ${total.toFixed(2)} ${o.currency}`, 'payment', user);
-  const isPaid = amount >= total - 0.001 && amount > 0;
+  const when = date || warsawNow();
+  tx(() => {
+    db.prepare(`UPDATE orders SET paid_amount = ?, payment_date = ?, updated_at = datetime('now') WHERE id = ?`).run(paid, paid > 0 ? when : null, id);
+    db.prepare('INSERT INTO order_payments (order_id, amount, paid_total, payment_date, comment, user_name) VALUES (?, ?, ?, ?, ?, ?)').run(
+      id,
+      round2(paid - o.paid_amount),
+      paid,
+      when,
+      comment,
+      user,
+    );
+    addHistory(id, `Payment set: ${paid.toFixed(2)} ${o.currency} of ${total.toFixed(2)} ${o.currency}`, 'payment', user);
+  });
+  const isPaid = paid >= total - 0.001 && paid > 0;
   if (isPaid && !wasPaid) emit('order_paid', { orderId: id, user });
+}
+
+/** An order with an invoice or receipt: products, prices and delivery cost are fixed (change them with a correction). */
+export function assertNotLocked(orderId: number) {
+  const o = db.prepare('SELECT locked FROM orders WHERE id = ?').get(orderId) as { locked: number } | undefined;
+  if (o?.locked) throw new HttpError(409, 'The order is locked — unlock it to change products');
+  const doc = db.prepare(`SELECT number FROM invoices WHERE order_id = ? AND type IN ('invoice', 'receipt') LIMIT 1`).get(orderId) as { number: string } | undefined;
+  if (doc) throw new HttpError(409, `The order has the document ${doc.number} — issue a correction instead of changing products or prices`);
 }
 
 export function addItem(orderId: number, it: ItemInput, user = 'System') {
   getOrder(orderId);
+  assertNotLocked(orderId);
   const settings = getSetting('orders', { default_tax_rate: 23 } as any);
   const res = tx(() => {
     const r = insertItem(orderId, it, settings.default_tax_rate ?? 23);
@@ -309,6 +346,8 @@ export function updateItem(orderId: number, itemId: number, patch: Partial<ItemI
   const data: Record<string, any> = {};
   for (const f of fields) if (patch[f] !== undefined) data[f] = patch[f];
   if (!Object.keys(data).length) return;
+  // Linking a product or changing the storage location does not change the document.
+  if (Object.keys(data).some((k) => ['name', 'quantity', 'price', 'tax_rate'].includes(k) && data[k] !== it[k])) assertNotLocked(orderId);
   tx(() => {
     // Give back the old quantity and take the new one (stock or reservation).
     const newPid = data.product_id !== undefined ? data.product_id : it.product_id;
@@ -329,6 +368,7 @@ export function deleteItem(orderId: number, itemId: number, user = 'System') {
   getOrder(orderId);
   const it = db.prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ?').get(itemId, orderId) as any;
   if (!it) throw notFound('Item not found');
+  assertNotLocked(orderId);
   tx(() => {
     if (it.product_id) orderLineChanged(orderId, it.product_id, -it.quantity);
     db.prepare('DELETE FROM order_items WHERE id = ?').run(itemId);
@@ -414,6 +454,7 @@ export function mergeOrders(ids: number[], user = 'System'): number {
 export function splitOrder(id: number, lines: (number | { id: number; quantity?: number })[], user = 'System'): number {
   const o = getOrder(id);
   if (o.deleted) throw new HttpError(400, 'The order is in the bin');
+  assertNotLocked(id);
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(id) as any[];
   const wanted = new Map<number, number>();
   for (const l of lines) {
@@ -498,6 +539,7 @@ export function getOrderFull(id: number) {
     .all(id);
   const returns = db.prepare('SELECT id, status_id, refund_amount, created_at FROM returns WHERE order_id = ?').all(id);
   const emails = db.prepare('SELECT id, to_address, subject, status, created_at FROM email_log WHERE order_id = ? ORDER BY id DESC').all(id);
+  const payments = db.prepare('SELECT * FROM order_payments WHERE order_id = ? ORDER BY id DESC').all(id);
   const integration = o.integration_id
     ? db.prepare('SELECT id, type, name FROM integrations WHERE id = ?').get(o.integration_id)
     : null;
@@ -511,6 +553,7 @@ export function getOrderFull(id: number) {
     invoices,
     returns,
     emails,
+    payments,
     integration,
   };
 }

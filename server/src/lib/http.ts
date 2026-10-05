@@ -81,3 +81,6 @@ export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 10
 export function nowSql(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
+
+/** LIKE argument "contains s": % and _ typed by the user are matched literally (use with ESCAPE '!'). */
+export const likeContains = (s: string) => `%${s.replace(/[!%_]/g, (m) => '!' + m)}%`;

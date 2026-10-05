@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db, parseJson } from '../db/index.js';
-import { HttpError, idParam, q } from '../lib/http.js';
+import { HttpError, idParam, q, likeContains } from '../lib/http.js';
 import { openJson, sealJson } from '../lib/secrets.js';
 import { pollDeviceToken, startDeviceAuth } from '../integrations/allegro.js';
 import { EMPIK_DEFAULT_URL, empikBaseUrl } from '../integrations/empik.js';
@@ -331,8 +331,8 @@ offersRouter.get('/', (req, res) => {
     p.push(integration);
   }
   if (search) {
-    const like = `%${search}%`;
-    w.push('(o.title LIKE ? OR o.sku LIKE ? OR o.ean LIKE ? OR o.external_id = ?)');
+    const like = likeContains(String(search));
+    w.push(`(o.title LIKE ? ESCAPE '!' OR o.sku LIKE ? ESCAPE '!' OR o.ean LIKE ? ESCAPE '!' OR o.external_id = ?)`);
     p.push(like, like, like, search);
   }
   if (linked === 'yes') w.push('o.product_id IS NOT NULL');

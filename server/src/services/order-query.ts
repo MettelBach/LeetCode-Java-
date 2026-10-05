@@ -1,5 +1,5 @@
 import { db } from '../db/index.js';
-import { q } from '../lib/http.js';
+import { q, likeContains } from '../lib/http.js';
 
 export interface OrderFilters {
   view?: 'active' | 'archive' | 'bin';
@@ -94,26 +94,26 @@ export function buildWhere(f: OrderFilters): { where: string; params: unknown[] 
     p.push(...f.integration_ids);
   }
   if (f.search) {
-    const like = `%${f.search}%`;
-    w.push(`(CAST(o.id AS TEXT) = ? OR o.external_id LIKE ? OR o.delivery_fullname LIKE ? OR o.invoice_fullname LIKE ? OR o.invoice_company LIKE ?
-      OR o.email LIKE ? OR o.phone LIKE ? OR o.user_login LIKE ? OR o.delivery_city LIKE ? OR o.invoice_nip LIKE ?
-      OR EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND (i.name LIKE ? OR i.sku LIKE ? OR i.ean LIKE ?))
-      OR EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.tracking_number LIKE ?))`);
+    const like = likeContains(String(f.search));
+    w.push(`(CAST(o.id AS TEXT) = ? OR o.external_id LIKE ? ESCAPE '!' OR o.delivery_fullname LIKE ? ESCAPE '!' OR o.invoice_fullname LIKE ? ESCAPE '!' OR o.invoice_company LIKE ? ESCAPE '!'
+      OR o.email LIKE ? ESCAPE '!' OR o.phone LIKE ? ESCAPE '!' OR o.user_login LIKE ? ESCAPE '!' OR o.delivery_city LIKE ? ESCAPE '!' OR o.invoice_nip LIKE ? ESCAPE '!'
+      OR EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND (i.name LIKE ? ESCAPE '!' OR i.sku LIKE ? ESCAPE '!' OR i.ean LIKE ? ESCAPE '!'))
+      OR EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.tracking_number LIKE ? ESCAPE '!'))`);
     p.push(f.search, like, like, like, like, like, like, like, like, like, like, like, like, like);
   }
   if (f.buyer) {
-    const like = `%${f.buyer}%`;
-    w.push('(o.delivery_fullname LIKE ? OR o.email LIKE ? OR o.user_login LIKE ? OR o.phone LIKE ? OR o.invoice_company LIKE ?)');
+    const like = likeContains(String(f.buyer));
+    w.push(`(o.delivery_fullname LIKE ? ESCAPE '!' OR o.email LIKE ? ESCAPE '!' OR o.user_login LIKE ? ESCAPE '!' OR o.phone LIKE ? ESCAPE '!' OR o.invoice_company LIKE ? ESCAPE '!')`);
     p.push(like, like, like, like, like);
   }
   if (f.product) {
-    const like = `%${f.product}%`;
-    w.push('EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND (i.name LIKE ? OR i.sku LIKE ? OR i.ean LIKE ?))');
+    const like = likeContains(String(f.product));
+    w.push(`EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND (i.name LIKE ? ESCAPE '!' OR i.sku LIKE ? ESCAPE '!' OR i.ean LIKE ? ESCAPE '!'))`);
     p.push(like, like, like);
   }
   if (f.comment) {
-    const like = `%${f.comment}%`;
-    w.push('(o.buyer_comment LIKE ? OR o.seller_comment LIKE ?)');
+    const like = likeContains(String(f.comment));
+    w.push(`(o.buyer_comment LIKE ? ESCAPE '!' OR o.seller_comment LIKE ? ESCAPE '!')`);
     p.push(like, like);
   }
   if (f.payment === 'paid') w.push(`o.paid_amount > 0 AND o.paid_amount >= ${TOTAL_SQL} - 0.001`);
@@ -125,12 +125,12 @@ export function buildWhere(f: OrderFilters): { where: string; params: unknown[] 
     p.push(f.cod ? 1 : 0);
   }
   if (f.delivery_method) {
-    w.push('o.delivery_method LIKE ?');
-    p.push(`%${f.delivery_method}%`);
+    w.push(`o.delivery_method LIKE ? ESCAPE '!'`);
+    p.push(likeContains(String(f.delivery_method)));
   }
   if (f.payment_method) {
-    w.push('o.payment_method LIKE ?');
-    p.push(`%${f.payment_method}%`);
+    w.push(`o.payment_method LIKE ? ESCAPE '!'`);
+    p.push(likeContains(String(f.payment_method)));
   }
   if (f.country) {
     w.push('o.delivery_country_code = ?');

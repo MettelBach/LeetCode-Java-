@@ -1,6 +1,7 @@
 import { Router, type Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db/index.js';
+import { isValidDateTime } from '../lib/dates.js';
 import { HttpError, idParam } from '../lib/http.js';
 import { runRulesFor } from '../services/automation.js';
 import { sendEmail, sendTemplateEmail } from '../services/email.js';
@@ -15,6 +16,7 @@ import {
   deleteOrder,
   duplicateOrder,
   EDITABLE_FIELDS,
+  getOrder,
   getOrderFull,
   mergeOrders,
   restoreOrder,
@@ -82,7 +84,7 @@ const orderFieldsSchema = z
     extra_field_2: str(500),
     star: z.number().int().min(0).max(5),
     flag: str(20),
-    date_add: z.string().regex(/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/),
+    date_add: z.string().refine(isValidDateTime, 'Invalid date'),
   })
   .partial();
 
@@ -157,7 +159,20 @@ ordersRouter.get('/:id', (req, res) => {
 });
 
 ordersRouter.post('/', (req, res) => {
-  const b = orderFieldsSchema.extend({ status_id: z.number().int().optional(), items: z.array(itemSchema).max(500).optional(), paid_amount: z.number().min(0).optional() }).parse(req.body);
+  const b = orderFieldsSchema
+    .extend({
+      status_id: z.number().int().optional(),
+      items: z.array(itemSchema).max(500).optional(),
+      paid_amount: z.number().min(0).max(1e8).optional(),
+      payment_date: z.string().refine(isValidDateTime, 'Invalid payment date').optional(),
+      warehouse_id: z.number().int().optional(),
+    })
+    .parse(req.body);
+  if (b.status_id && !db.prepare('SELECT 1 FROM order_statuses WHERE id = ?').get(b.status_id)) throw new HttpError(400, 'Unknown status');
+  if (b.warehouse_id && !db.prepare('SELECT 1 FROM warehouses WHERE id = ?').get(b.warehouse_id)) throw new HttpError(400, 'Unknown warehouse');
+  for (const it of b.items ?? []) if (it.product_id && !db.prepare('SELECT 1 FROM products WHERE id = ?').get(it.product_id)) throw new HttpError(400, 'Product not found');
+  // Discount lines may be negative, the order as a whole may not.
+  if ((b.items ?? []).reduce((sum, it) => sum + it.price * it.quantity, 0) + (b.delivery_price ?? 0) < 0) throw new HttpError(400, 'The order total cannot be negative');
   const id = createOrder({ ...b, source: 'manual' }, userName(req));
   res.json({ id });
 });
@@ -193,8 +208,20 @@ ordersRouter.post('/:id/status', (req, res) => {
 });
 
 ordersRouter.post('/:id/payment', (req, res) => {
-  const b = z.object({ paid_amount: z.number().min(0).max(1e8), payment_date: z.string().optional() }).parse(req.body);
-  setPayment(idParam(req), b.paid_amount, userName(req), b.payment_date);
+  const b = z
+    .object({ paid_amount: z.number().min(0).max(1e8), payment_date: z.string().refine(isValidDateTime, 'Invalid payment date').optional(), comment: z.string().max(300).optional() })
+    .parse(req.body);
+  setPayment(idParam(req), b.paid_amount, userName(req), b.payment_date, b.comment ?? '');
+  res.json({ ok: true });
+});
+
+/** Locks the order against changes of products and prices (like "Zablokuj zamówienie" in BaseLinker). */
+ordersRouter.post('/:id/lock', (req, res) => {
+  const id = idParam(req);
+  const b = z.object({ locked: z.boolean() }).parse(req.body);
+  getOrder(id);
+  db.prepare(`UPDATE orders SET locked = ?, updated_at = datetime('now') WHERE id = ?`).run(b.locked ? 1 : 0, id);
+  addHistory(id, b.locked ? 'Order locked' : 'Order unlocked', 'edit', userName(req));
   res.json({ ok: true });
 });
 
@@ -231,6 +258,7 @@ ordersRouter.post('/:id/split', (req, res) => {
 
 ordersRouter.post('/:id/note', (req, res) => {
   const b = z.object({ message: z.string().min(1).max(2000) }).parse(req.body);
+  getOrder(idParam(req));
   addHistory(idParam(req), b.message, 'note', userName(req));
   res.json({ ok: true });
 });

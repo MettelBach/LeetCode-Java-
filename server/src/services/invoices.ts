@@ -1,4 +1,5 @@
 import { db, getSetting, parseJson, tx } from '../db/index.js';
+import { addDays, isValidDate, warsawToday } from '../lib/dates.js';
 import { HttpError, notFound, round2 } from '../lib/http.js';
 import { emit } from './events.js';
 import { addHistory, getOrder } from './orders.js';
@@ -48,8 +49,8 @@ export function computeTotals(items: InvoiceItem[]) {
 }
 
 function periodKey(reset: string, date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
   if (reset === 'year') return `${y}`;
   if (reset === 'never') return 'all';
   return `${y}-${m}`;
@@ -58,9 +59,9 @@ function periodKey(reset: string, date: Date) {
 export function formatNumber(format: string, seq: number, date: Date) {
   return format
     .replace(/%N/g, String(seq))
-    .replace(/%M/g, String(date.getMonth() + 1).padStart(2, '0'))
-    .replace(/%Y/g, String(date.getFullYear()))
-    .replace(/%y/g, String(date.getFullYear()).slice(2));
+    .replace(/%M/g, String(date.getUTCMonth() + 1).padStart(2, '0'))
+    .replace(/%Y/g, String(date.getUTCFullYear()))
+    .replace(/%y/g, String(date.getUTCFullYear()).slice(2));
 }
 
 function nextNumber(seriesId: number, issueDate: Date) {
@@ -68,6 +69,10 @@ function nextNumber(seriesId: number, issueDate: Date) {
   if (!s) throw new HttpError(400, 'Unknown invoice series');
   const period = periodKey(s.reset_period, issueDate);
   const r = db.prepare('SELECT MAX(seq) m FROM invoices WHERE series_id = ? AND period = ?').get(seriesId, period) as { m: number | null };
+  // Numbers follow dates: a document cannot be dated before the last one of its series.
+  const last = db.prepare('SELECT MAX(issue_date) d FROM invoices WHERE series_id = ? AND period = ?').get(seriesId, period) as { d: string | null };
+  const iso = issueDate.toISOString().slice(0, 10);
+  if (last.d && iso < last.d) throw new HttpError(400, `The issue date cannot be earlier than the last document of this series (${last.d})`);
   const seq = (r.m ?? 0) + 1;
   return { seq, period, number: formatNumber(s.format, seq, issueDate) };
 }
@@ -130,13 +135,25 @@ export interface IssueOptions {
   payment_due_days?: number;
   user?: string;
   notes?: string;
+  /** Automation chain the document is issued from (loop protection). */
+  meta?: { depth?: number; ruleIds?: number[] };
 }
 
 export function issueForOrder(orderId: number, type: Exclude<InvoiceType, 'correction'>, opts: IssueOptions = {}): number {
   const o = getOrder(orderId);
+  if (o.deleted) throw new HttpError(400, 'The order is in the bin');
+  let notes = opts.notes;
   if (type !== 'proforma') {
     const existing = db.prepare('SELECT number FROM invoices WHERE order_id = ? AND type = ?').get(orderId, type) as { number: string } | undefined;
     if (existing) throw new HttpError(409, `Document already issued: ${existing.number}`);
+    if (type === 'receipt') {
+      const inv = db.prepare(`SELECT number FROM invoices WHERE order_id = ? AND type = 'invoice'`).get(orderId) as { number: string } | undefined;
+      if (inv) throw new HttpError(409, `The order already has an invoice: ${inv.number}`);
+    } else {
+      // An invoice to an issued receipt ("faktura do paragonu") refers to it.
+      const rec = db.prepare(`SELECT number FROM invoices WHERE order_id = ? AND type = 'receipt'`).get(orderId) as { number: string } | undefined;
+      if (rec) notes = [`Faktura do paragonu nr ${rec.number}`, notes].filter(Boolean).join('\n');
+    }
   }
   const items = itemsFromOrder(orderId);
   if (!items.length) throw new HttpError(400, 'Order has no products');
@@ -152,12 +169,12 @@ export function issueForOrder(orderId: number, type: Exclude<InvoiceType, 'corre
     buyer: buyerFromOrder(o),
     items,
     payment_due_days: opts.payment_due_days,
-    notes: opts.notes,
+    notes,
   });
   const inv = db.prepare('SELECT number FROM invoices WHERE id = ?').get(id) as { number: string };
   const label = type === 'receipt' ? 'Receipt' : type === 'proforma' ? 'Pro forma' : 'Invoice';
   addHistory(orderId, `${label} issued: ${inv.number}`, 'invoice', opts.user ?? 'System');
-  emit(type === 'receipt' ? 'receipt_created' : 'invoice_created', { orderId, user: opts.user, invoiceId: id });
+  emit(type === 'receipt' ? 'receipt_created' : 'invoice_created', { orderId, user: opts.user, invoiceId: id, ...opts.meta });
   return id;
 }
 
@@ -180,8 +197,10 @@ export interface CreateInvoiceInput {
 
 export function createInvoice(input: CreateInvoiceInput): number {
   return tx(() => {
-    const issue = input.issue_date ? new Date(input.issue_date) : new Date();
-    if (Number.isNaN(issue.getTime())) throw new HttpError(400, 'Invalid issue date');
+    const issueStr = input.issue_date ?? warsawToday();
+    if (!isValidDate(issueStr)) throw new HttpError(400, 'Invalid issue date');
+    if (input.sale_date !== undefined && !isValidDate(input.sale_date)) throw new HttpError(400, 'Invalid sale date');
+    const issue = new Date(`${issueStr}T00:00:00Z`);
     const seriesId = input.series_id ?? defaultSeries(input.type);
     const { seq, period, number } = nextNumber(seriesId, issue);
     const company = getSetting<Party & Record<string, string>>('company', { name: '' });
@@ -189,9 +208,6 @@ export function createInvoice(input: CreateInvoiceInput): number {
       input.type === 'correction' && input.corrected_invoice_id
         ? correctionTotals(input.corrected_invoice_id, input.items)
         : computeTotals(input.items);
-    const issueStr = issue.toISOString().slice(0, 10);
-    const due = new Date(issue);
-    due.setDate(due.getDate() + (input.payment_due_days ?? 7));
     const r = db
       .prepare(
         `INSERT INTO invoices (order_id, series_id, type, number, seq, period, issue_date, sale_date, payment_due, payment_method, paid, currency,
@@ -207,7 +223,7 @@ export function createInvoice(input: CreateInvoiceInput): number {
         period,
         issueStr,
         input.sale_date ?? issueStr,
-        due.toISOString().slice(0, 10),
+        addDays(issueStr, input.payment_due_days ?? 7),
         input.payment_method ?? '',
         input.paid ? 1 : 0,
         input.currency ?? 'PLN',
@@ -236,10 +252,21 @@ export function createInvoice(input: CreateInvoiceInput): number {
   });
 }
 
+/**
+ * Items of an invoice as they stand before correction `beforeId` (or now):
+ * the latest earlier correction, otherwise the invoice itself.
+ */
+function stateBefore(originalId: number, beforeId = Number.MAX_SAFE_INTEGER): { id: number; number: string; items: InvoiceItem[]; issue_date: string } {
+  const row = (db
+    .prepare(`SELECT id, number, items, issue_date FROM invoices WHERE corrected_invoice_id = ? AND type = 'correction' AND id < ? ORDER BY id DESC LIMIT 1`)
+    .get(originalId, beforeId) ?? db.prepare('SELECT id, number, items, issue_date FROM invoices WHERE id = ?').get(originalId)) as any;
+  if (!row) throw notFound('Corrected invoice not found');
+  return { ...row, items: parseJson<InvoiceItem[]>(row.items, []) };
+}
+
 function correctionTotals(originalId: number, newItems: InvoiceItem[]) {
-  const orig = db.prepare('SELECT items FROM invoices WHERE id = ?').get(originalId) as { items: string } | undefined;
-  if (!orig) throw notFound('Corrected invoice not found');
-  const before = computeTotals(parseJson<InvoiceItem[]>(orig.items, []));
+  // The difference is counted from the latest state, so a second correction does not repeat the first.
+  const before = computeTotals(stateBefore(originalId).items);
   const after = computeTotals(newItems);
   return {
     total_net: round2(after.total_net - before.total_net),
@@ -252,21 +279,24 @@ function correctionTotals(originalId: number, newItems: InvoiceItem[]) {
 export function createCorrection(invoiceId: number, items: InvoiceItem[], reason: string, user = 'System'): number {
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) as any;
   if (!inv) throw notFound('Invoice not found');
-  if (inv.type !== 'invoice') throw new HttpError(400, 'Only invoices can be corrected');
+  if (inv.type !== 'invoice' && inv.type !== 'correction') throw new HttpError(400, 'Only invoices can be corrected');
+  // Every correction refers to the original invoice; correcting a correction continues the chain.
+  const original = inv.type === 'correction' ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.corrected_invoice_id) as any : inv;
+  if (!original) throw notFound('Corrected invoice not found');
   const id = createInvoice({
     order_id: inv.order_id,
     type: 'correction',
     sale_date: inv.sale_date,
     payment_method: inv.payment_method,
     currency: inv.currency,
-    buyer: parseJson(inv.buyer, { name: '' }),
+    buyer: parseJson(original.buyer, { name: '' }),
     items,
-    corrected_invoice_id: invoiceId,
+    corrected_invoice_id: original.id,
     correction_reason: reason,
   });
   if (inv.order_id) {
     const c = db.prepare('SELECT number FROM invoices WHERE id = ?').get(id) as { number: string };
-    addHistory(inv.order_id, `Correction issued: ${c.number} (to ${inv.number})`, 'invoice', user);
+    addHistory(inv.order_id, `Correction issued: ${c.number} (to ${original.number})`, 'invoice', user);
   }
   return id;
 }
@@ -274,16 +304,21 @@ export function createCorrection(invoiceId: number, items: InvoiceItem[], reason
 export function getInvoice(id: number) {
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
   if (!inv) throw notFound('Invoice not found');
-  const corrected = inv.corrected_invoice_id
-    ? (db.prepare('SELECT id, number, items, issue_date FROM invoices WHERE id = ?').get(inv.corrected_invoice_id) as any)
-    : null;
+  // "Before correction" shows the state this correction changed (the previous correction, if any);
+  // the document it refers to is always the original invoice.
+  let corrected: any = null;
+  if (inv.corrected_invoice_id) {
+    const orig = db.prepare('SELECT id, number, issue_date FROM invoices WHERE id = ?').get(inv.corrected_invoice_id) as any;
+    const prev = stateBefore(inv.corrected_invoice_id, inv.id);
+    corrected = { ...orig, items: prev.items, previous_correction: prev.id !== orig?.id ? { id: prev.id, number: prev.number } : null };
+  }
   return {
     ...inv,
     buyer: parseJson(inv.buyer, {}),
     seller: parseJson(inv.seller, {}),
     items: parseJson(inv.items, []),
     totals: computeTotals(parseJson(inv.items, [])),
-    corrected: corrected ? { ...corrected, items: parseJson(corrected.items, []) } : null,
+    corrected,
   };
 }
 

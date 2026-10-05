@@ -27,6 +27,8 @@ import {
   X,
   Check,
   Send,
+  Lock,
+  LockOpen,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -38,6 +40,7 @@ import { COUNTRIES, fmtDateTime, money } from '../../format';
 import { useT } from '../../i18n';
 import { AddOrderButton } from './StatusColumn';
 import { historyText, SHIP_STATUS_LABEL } from './historyText';
+import { useAuth } from '../../auth';
 
 export default function OrderCard() {
   const { id } = useParams();
@@ -136,10 +139,20 @@ function ProductsCard({ o }: { o: any }) {
   const [editing, setEditing] = useState<any | null>(null);
   const [splitMode, setSplitMode] = useState(false);
   const [splitIds, setSplitIds] = useState<number[]>([]);
+  const [splitQty, setSplitQty] = useState<Record<number, number>>({});
   const nav = useNavigate();
   const itemsTotal = o.items.reduce((s: number, i: any) => s + i.price * i.quantity, 0);
+  const fiscal = o.invoices.find((v: any) => v.type === 'invoice' || v.type === 'receipt');
   return (
     <>
+      {(o.locked || fiscal) && (
+        <div className="notice">
+          <Lock size={16} />
+          {o.locked
+            ? t('The order is locked — products and prices cannot be changed.')
+            : t('The order has the document {n} — products and prices are fixed; change them with a correction.', { n: fiscal.number })}
+        </div>
+      )}
       <div className="table-wrap">
         <table className="tbl">
           <thead>
@@ -164,6 +177,18 @@ function ProductsCard({ o }: { o: any }) {
                 {splitMode && (
                   <td className="check">
                     <input type="checkbox" checked={splitIds.includes(i.id)} onChange={() => setSplitIds((s) => (s.includes(i.id) ? s.filter((x) => x !== i.id) : [...s, i.id]))} />
+                    {splitIds.includes(i.id) && i.quantity > 1 && (
+                      <input
+                        className="input input-sm"
+                        style={{ width: 56, marginTop: 4 }}
+                        type="number"
+                        min={1}
+                        max={i.quantity}
+                        title={t('Quantity to move')}
+                        value={splitQty[i.id] ?? i.quantity}
+                        onChange={(e) => setSplitQty({ ...splitQty, [i.id]: Math.min(i.quantity, Math.max(1, Number(e.target.value) || 1)) })}
+                      />
+                    )}
                   </td>
                 )}
                 <td>
@@ -314,7 +339,10 @@ function ProductsCard({ o }: { o: any }) {
               className="btn btn-primary btn-pill"
               disabled={!splitIds.length}
               onClick={async () => {
-                const r = await run(() => api.post(`/orders/${o.id}/split`, { item_ids: splitIds }), t('Order split'));
+                const r = await run(
+                  () => api.post(`/orders/${o.id}/split`, { items: splitIds.map((id) => ({ id, quantity: splitQty[id] })) }),
+                  t('Order split'),
+                );
                 if (r) {
                   setSplitMode(false);
                   setSplitIds([]);
@@ -498,7 +526,8 @@ function OrderInfoCard({ o }: { o: any }) {
   const paidFull = o.paid_amount > 0 && o.paid_amount >= o.total - 0.001;
   const invoice = o.invoices.find((v: any) => v.type === 'invoice');
   const receipt = o.invoices.find((v: any) => v.type === 'receipt');
-  const orderPage = `${window.location.origin}/order/${o.id}/${o.token}`;
+  const { user } = useAuth();
+  const orderPage = `${window.location.origin}/order/${user?.account_id ?? user?.account.id}/${o.id}/${o.token}`;
   const s = settings.data?.orders ?? {};
 
   const changeStatus = async (statusId: number) => {
@@ -597,6 +626,12 @@ function OrderInfoCard({ o }: { o: any }) {
               </DdItem>
               <DdItem icon={<Undo2 />} onClick={() => (setModal('return'), close())}>
                 {t('Create return')}
+              </DdItem>
+              <DdItem
+                icon={o.locked ? <LockOpen /> : <Lock />}
+                onClick={() => (run(() => api.post(`/orders/${o.id}/lock`, { locked: !o.locked }), o.locked ? t('Order unlocked') : t('Order locked')).then(invalidate), close())}
+              >
+                {o.locked ? t('Unlock order') : t('Lock order')}
               </DdItem>
               <DdItem
                 icon={<Copy />}
@@ -981,8 +1016,13 @@ function PaymentModal({ o, onClose }: { o: any; onClose: () => void }) {
   const run = useAction();
   const invalidate = useInvalidateOrders();
   const [amount, setAmount] = useState(String(o.paid_amount.toFixed(2)));
+  const [date, setDate] = useState('');
+  const [comment, setComment] = useState('');
   const save = async (v: number) => {
-    const r = await run(() => api.post(`/orders/${o.id}/payment`, { paid_amount: v }), t('Payment saved'));
+    const r = await run(
+      () => api.post(`/orders/${o.id}/payment`, { paid_amount: v, payment_date: date ? `${date.replace('T', ' ')}:00`.slice(0, 19) : undefined, comment: comment || undefined }),
+      t('Payment saved'),
+    );
     if (r) {
       invalidate();
       onClose();
@@ -1006,10 +1046,15 @@ function PaymentModal({ o, onClose }: { o: any; onClose: () => void }) {
       <p style={{ marginTop: 0 }}>
         {t('Order total')}: <b>{money(o.total, o.currency)}</b>
       </p>
-      <Field label={`${t('Paid amount')} (${o.currency})`}>
-        <input className="input" value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" autoFocus />
-      </Field>
-      <div className="row">
+      <div className="form-grid">
+        <Field label={`${t('Paid amount')} (${o.currency})`}>
+          <input className="input" value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" autoFocus />
+        </Field>
+        <Field label={t('Payment date')} help={t('Empty = now')}>
+          <input className="input" type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)} />
+        </Field>
+      </div>
+      <div className="row mb">
         <button className="btn btn-sm" onClick={() => setAmount(o.total.toFixed(2))}>
           {t('Fully paid')}
         </button>
@@ -1017,6 +1062,31 @@ function PaymentModal({ o, onClose }: { o: any; onClose: () => void }) {
           {t('Not paid')}
         </button>
       </div>
+      <Field label={t('Comment')}>
+        <input className="input" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={300} placeholder={t('e.g. bank transfer, cash on delivery')} />
+      </Field>
+      {o.payments?.length > 0 && (
+        <>
+          <div className="field-label mt">{t('Payment history')}</div>
+          <table className="tbl">
+            <tbody>
+              {o.payments.map((p: any) => (
+                <tr key={p.id}>
+                  <td className="nowrap">{fmtDateTime(p.payment_date)}</td>
+                  <td className="num nowrap" style={{ color: p.amount < 0 ? 'var(--red)' : 'var(--green)' }}>
+                    {p.amount > 0 ? '+' : ''}
+                    {money(p.amount, o.currency)}
+                  </td>
+                  <td className="num nowrap">= {money(p.paid_total, o.currency)}</td>
+                  <td className="text-muted text-small">
+                    {p.comment ? t(p.comment) : ''} {p.user_name && <span>· {p.user_name}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </Modal>
   );
 }
