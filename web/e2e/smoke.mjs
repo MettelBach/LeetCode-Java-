@@ -12,8 +12,10 @@ const step = async (name, fn) => {
   try {
     await fn();
     results.push(['ok', name]);
+    if (process.env.VERBOSE) console.log('ok —', name);
   } catch (e) {
     results.push(['FAIL', name, e.message.split('\n')[0]]);
+    if (process.env.VERBOSE) console.log('FAIL —', name, e.message.split('\n')[0]);
   }
 };
 
@@ -52,9 +54,9 @@ await step('add manual order', async () => {
   await page.getByPlaceholder('Search inventory: name, SKU, EAN...').fill('Kawa');
   await page.getByRole('button', { name: /Kawa ziarnista/ }).click();
   await page.getByLabel('Name and surname').first().fill('Jan E2E');
-  await page.getByLabel('Address').first().fill('ul. Testowa 5');
-  await page.getByLabel('Postal code').first().fill('00-950');
-  await page.getByLabel('City').first().fill('Warszawa');
+  await page.getByLabel('Address', { exact: true }).first().fill('ul. Testowa 5');
+  await page.getByLabel('Postal code', { exact: true }).first().fill('00-950');
+  await page.getByLabel('City', { exact: true }).first().fill('Warszawa');
   await page.getByRole('button', { name: 'Add order' }).last().click();
   await page.getByText('Order information', { exact: true }).waitFor();
 });
