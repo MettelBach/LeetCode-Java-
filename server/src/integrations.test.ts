@@ -130,4 +130,38 @@ describe('Integrations', () => {
     expect(back.status).toBe(302);
     expect(back.headers.get('location')).toContain(`/integrations/${live}?oauth=denied`);
   });
+
+  it('offers deleted on the marketplace are ended and a recreated offer takes over the link', async () => {
+    const integ = (await api('GET', '/integrations')).data.find((i: any) => i.type === 'allegro');
+    const me = (await api('GET', '/auth/me')).data;
+    const accountId = me.account?.id ?? me.user?.account_id;
+    const { tenantDb } = await import('./db/index.js');
+    const tdb = tenantDb(accountId);
+    const pid = (await api('POST', '/products', { name: 'Stara oferta', sku: 'GONE-1' })).data.id;
+    // An offer that the marketplace no longer returns, and a placeholder of a listing in progress.
+    tdb.prepare(`INSERT INTO offers (integration_id, external_id, title, sku, product_id, status) VALUES (?, 'old-1', 'Old', 'GONE-1', ?, 'active')`).run(integ.id, pid);
+    tdb.prepare(`INSERT INTO offers (integration_id, external_id, title, sku, status, last_synced_at) VALUES (?, 'pending-1', 'New', 'NEW-1', 'pending', datetime('now'))`).run(integ.id);
+    await api('POST', `/integrations/${integ.id}/sync-offers`);
+    const old = tdb.prepare(`SELECT * FROM offers WHERE external_id = 'old-1'`).get() as any;
+    expect(old.status).toBe('ended');
+    expect(old.missing_since).toBeTruthy();
+    expect(tdb.prepare(`SELECT status FROM offers WHERE external_id = 'pending-1'`).get()).toEqual({ status: 'pending' });
+    // The demo account "recreates" an offer with the same SKU under a new id → the link moves over.
+    const demoSku = (tdb.prepare(`SELECT sku, external_id FROM offers WHERE integration_id = ? AND sku != '' AND status != 'ended' LIMIT 1`).get(integ.id) as any);
+    const p2 = (await api('POST', '/products', { name: 'Przeniesiona', sku: 'MOVED-1' })).data.id;
+    tdb.prepare(`UPDATE offers SET external_id = 'gone-' || external_id, product_id = ?, link_locked = 1, sku = ? WHERE integration_id = ? AND external_id = ?`).run(p2, demoSku.sku, integ.id, demoSku.external_id);
+    await api('POST', `/integrations/${integ.id}/sync-offers`);
+    await api('POST', `/integrations/${integ.id}/sync-offers`);
+    const fresh = tdb.prepare(`SELECT product_id, link_locked FROM offers WHERE integration_id = ? AND external_id = ?`).get(integ.id, demoSku.external_id) as any;
+    expect(fresh).toEqual({ product_id: p2, link_locked: 1 });
+    expect(tdb.prepare(`SELECT 1 FROM offers WHERE external_id = ?`).get('gone-' + demoSku.external_id)).toBeUndefined();
+  });
+
+  it('switching from demo to a real account removes demo offers', async () => {
+    const id = (await api('POST', '/integrations', { type: 'kaufland', name: 'KL demo', demo: true })).data.id;
+    await api('POST', `/integrations/${id}/sync-offers`);
+    expect((await api('GET', `/integrations/${id}`)).data.stats.offers).toBeGreaterThan(0);
+    await api('PUT', `/integrations/${id}`, { demo: false });
+    expect((await api('GET', `/integrations/${id}`)).data.stats.offers).toBe(0);
+  });
 });

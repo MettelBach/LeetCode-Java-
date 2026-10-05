@@ -11,6 +11,7 @@ import {
   loadIntegration,
   marketplacePrice,
   offerBasePrice,
+  offerPriceCurrency,
   marketplaceStock,
   offerStock,
   pushOffers,
@@ -203,6 +204,13 @@ integrationsRouter.put('/:id', requireAdmin, (req, res) => {
     JSON.stringify(settings),
     id,
   );
+  // Switching between demo and a real account: the offers belong to the other account and
+  // the order cursor must start again (demo orders already imported stay, marked by source).
+  if (b.demo !== undefined && !!row.demo !== b.demo) {
+    db.prepare('DELETE FROM offers WHERE integration_id = ?').run(id);
+    saveState(id, { orders_cursor: null });
+    syncLog(id, b.demo ? 'Switched to demo mode — offers of the real account removed' : 'Switched from demo mode to the real account — demo offers removed');
+  }
   // Changing the account credentials invalidates the Allegro tokens.
   if (row.type === 'allegro' && b.credentials) {
     const old = openJson<any>(row.credentials, {});
@@ -476,7 +484,12 @@ offersRouter.post('/list', async (req, res) => {
       results.push({ product_id: pid, ok: false, error: `Already listed (${existing.external_id})` });
       continue;
     }
-    const price = marketplacePrice(offerBasePrice(p.id, integration.settings) ?? p.price, integration.settings);
+    const base = offerBasePrice(p.id, integration.settings);
+    if (base === undefined) {
+      results.push({ product_id: pid, ok: false, error: 'No price in the price group of this integration' });
+      continue;
+    }
+    const price = marketplacePrice(base, integration.settings);
     const title = (b.title_template || '{name}').replaceAll('{name}', p.name).replaceAll('{sku}', p.sku).replaceAll('{ean}', p.ean).slice(0, 200);
     try {
       const o = await connector.createOffer({
@@ -485,7 +498,7 @@ offersRouter.post('/list', async (req, res) => {
         title,
         description: p.description,
         price,
-        currency: 'PLN',
+        currency: offerPriceCurrency(p.id, integration.settings),
         stock: marketplaceStock(offerStock(p.id, integration.settings.stock_warehouse_ids as number[] | undefined), integration.settings),
         images: parseJson<string[]>(p.images, []),
         category_id: b.category_id,

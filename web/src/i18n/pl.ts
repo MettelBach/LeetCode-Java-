@@ -1500,4 +1500,7 @@ export const pl: Record<string, string> = {
   "Choose an OLX category id": "Wybierz ID kategorii OLX",
   "Set the city (OLX city id) in the integration settings": "Ustaw miasto (ID miasta OLX) w ustawieniach integracji",
   "OLX requires a description of at least 80 characters": "OLX wymaga opisu o długości co najmniej 80 znaków",
+  "The referenced record does not exist or is still in use": "Powiązany rekord nie istnieje lub jest nadal używany",
+  "A record with this value already exists": "Rekord z tą wartością już istnieje",
+  "No price in the price group of this integration": "Brak ceny w grupie cenowej tej integracji",
 };

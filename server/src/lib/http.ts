@@ -39,6 +39,16 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     res.status(400).json({ error: 'Invalid JSON' });
     return;
   }
+  // A reference to a missing record or a duplicate that a route did not check explicitly.
+  const code = (err as any)?.code;
+  if (code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+    res.status(400).json({ error: 'The referenced record does not exist or is still in use' });
+    return;
+  }
+  if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+    res.status(409).json({ error: 'A record with this value already exists' });
+    return;
+  }
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });
 }

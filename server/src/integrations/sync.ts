@@ -81,6 +81,7 @@ function notify(message: string, type = 'info', link = '') {
 
 /** Integrations being synchronized right now (key: account:integration — ids are per account). */
 const running = new Set<string>();
+const currencyWarned = new Set<number>();
 
 /** Downloads new/updated orders from a marketplace account. */
 export async function syncOrders(id: number) {
@@ -167,14 +168,44 @@ export async function syncOffers(id: number) {
          missing_since = NULL, last_synced_at = datetime('now')`,
     );
     let linked = 0;
+    let missing = 0;
     db.transaction(() => {
+      const seen = new Set(offers.map((o) => o.external_id));
+      const known = new Set((db.prepare('SELECT external_id FROM offers WHERE integration_id = ?').all(id) as { external_id: string }[]).map((r) => r.external_id));
+      // Offers that were replaced on the marketplace: a placeholder of a listing still being
+      // processed (Empik import, Kaufland unit without id) or an offer recreated under a new id
+      // (Kaufland unit after reactivation). The new offer takes over the product link.
+      const predecessors = db.prepare(
+        `SELECT id, external_id, product_id, link_locked FROM offers WHERE integration_id = ? AND product_id IS NOT NULL AND external_id != ?
+           AND ((? != '' AND sku = ?) OR (? != '' AND ean = ?))
+         ORDER BY id DESC`,
+      );
+      const takeOver = db.prepare('UPDATE offers SET product_id = ?, link_locked = ? WHERE integration_id = ? AND external_id = ?');
       for (const o of offers) {
         const p = integration.settings.auto_link ? findProduct(o.sku, o.ean, integration.settings.catalog_id ? Number(integration.settings.catalog_id) : null) : undefined;
-        if (p) linked++;
         upsert.run({ ...o, integration_id: id, product_id: p?.id ?? null, raw: JSON.stringify(o.raw ?? {}) });
+        if (!known.has(o.external_id)) {
+          const rows = predecessors.all(id, o.external_id, o.sku ?? '', o.sku ?? '', o.ean ?? '', o.ean ?? '') as { id: number; external_id: string; product_id: number; link_locked: number }[];
+          // Only an offer that disappeared from the marketplace (or a placeholder) is a predecessor.
+          const prev = rows.find((r) => !seen.has(r.external_id));
+          if (prev) {
+            takeOver.run(prev.product_id, prev.link_locked, id, o.external_id);
+            db.prepare('DELETE FROM offers WHERE id = ?').run(prev.id);
+          }
+        }
       }
+      linked = (db.prepare('SELECT COUNT(*) c FROM offers WHERE integration_id = ? AND product_id IS NOT NULL').get(id) as { c: number }).c;
+      // Offers no longer returned by the marketplace were deleted there: mark them as ended
+      // (placeholders of listings still being processed are kept for a day).
+      const placeholders = `(status = 'pending' AND COALESCE(last_synced_at, datetime('now')) >= datetime('now', '-1 day'))`;
+      const stale = (db.prepare(`SELECT id, external_id FROM offers WHERE integration_id = ? AND NOT ${placeholders}`).all(id) as { id: number; external_id: string }[]).filter(
+        (r) => !seen.has(r.external_id),
+      );
+      const mark = db.prepare(`UPDATE offers SET status = 'ended', stock = 0, missing_since = COALESCE(missing_since, datetime('now')) WHERE id = ?`);
+      for (const r of stale) mark.run(r.id);
+      missing = stale.length;
     })();
-    syncLog(id, `Offers: ${offers.length} downloaded, ${linked} matched with inventory`);
+    syncLog(id, `Offers: ${offers.length} downloaded, ${linked} linked with inventory${missing ? `, ${missing} no longer on the marketplace` : ''}`);
     return { count: offers.length, linked };
   } catch (e: any) {
     syncLog(id, `Offer sync failed: ${e.message}`, 'error');
@@ -193,9 +224,23 @@ export function offerBasePrice(productId: number, s: IntegrationSettings): numbe
   const group = Number(s.price_group_id) || null;
   if (group) {
     const r = db.prepare('SELECT price FROM product_prices WHERE product_id = ? AND price_group_id = ?').get(productId, group) as { price: number } | undefined;
-    if (r) return r.price;
+    // No price in the selected group: nothing is sent rather than a price in another currency.
+    return r?.price;
   }
   return (db.prepare('SELECT price FROM products WHERE id = ?').get(productId) as { price: number } | undefined)?.price;
+}
+
+/** Currency of the price group whose prices go to the integration's offers. */
+export function offerPriceCurrency(productId: number, s: IntegrationSettings): string {
+  const group = Number(s.price_group_id) || null;
+  const row = group
+    ? (db.prepare('SELECT currency FROM price_groups WHERE id = ?').get(group) as { currency: string } | undefined)
+    : (db
+        .prepare(
+          `SELECT pg.currency FROM products p JOIN catalogs c ON c.id = p.catalog_id JOIN price_groups pg ON pg.id = c.default_price_group_id WHERE p.id = ?`,
+        )
+        .get(productId) as { currency: string } | undefined);
+  return row?.currency ?? 'PLN';
 }
 
 /** Price sent to a marketplace, after the integration's price rules. */
@@ -233,14 +278,19 @@ export async function pushOffers(
   for (const off of rows) {
     if (!integrations.has(off.integration_id)) integrations.set(off.integration_id, loadIntegration(off.integration_id));
     const integration = integrations.get(off.integration_id)!;
-    if (!integration.enabled || off.status === 'ended') continue;
+    if (!integration.enabled || off.status === 'ended' || off.status === 'pending') continue;
     const base = offerBasePrice(off.product_id, integration.settings);
-    if (base === undefined) continue;
     const stock = marketplaceStock(offerStock(off.product_id, integration.settings.stock_warehouse_ids as number[] | undefined), integration.settings);
-    const price = marketplacePrice(base, integration.settings);
+    const price = base === undefined ? undefined : marketplacePrice(base, integration.settings);
     const change: { stock?: number; price?: number } = {};
     if (doStock && integration.settings.sync_stock && off.sync_stock && (opts.force || stock !== off.stock)) change.stock = stock;
-    if (doPrice && integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(price - off.price) > 0.001)) change.price = price;
+    // A price is sent only in the offer's currency (a PLN price group must not land on a EUR storefront).
+    const sameCurrency = !off.currency || offerPriceCurrency(off.product_id, integration.settings) === off.currency;
+    if (!sameCurrency && doPrice && integration.settings.sync_price && !currencyWarned.has(integration.id)) {
+      currencyWarned.add(integration.id);
+      syncLog(integration.id, `Prices not sent: offers are in ${off.currency} — choose a price group in ${off.currency} in the integration settings`, 'warn');
+    }
+    if (price !== undefined && doPrice && sameCurrency && integration.settings.sync_price && off.sync_price && (opts.force || Math.abs(price - off.price) > 0.001)) change.price = price;
     if (change.stock === undefined && change.price === undefined) continue;
     // Mirakl (Empik) needs both values in one update.
     if (integration.type === 'empik') {
