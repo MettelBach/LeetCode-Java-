@@ -8,6 +8,7 @@ import { platformDb, runWithTenant } from '../db/index.js';
 import { HttpError, idParam, nowSql } from '../lib/http.js';
 import { seedDemo } from '../services/demo-seed.js';
 import { checkSecondFactor, twoFactorRouter } from './two-factor.js';
+import { assertGoodPassword } from '../lib/password-policy.js';
 import { createAccount, getAccount, planById, platformMail, refreshAccountStats, type AccountRow } from '../services/platform.js';
 
 export interface AuthUser {
@@ -166,6 +167,7 @@ authRouter.post('/register', async (req, res) => {
       attribution: z.record(z.string(), z.string().max(500)).optional(),
     })
     .parse(req.body);
+  await assertGoodPassword(b.password, { email: b.email, name: b.name, company: b.company });
   checkRate(`reg|${req.ip}`, 5);
   failRate(`reg|${req.ip}`);
   const { accountId, userId } = createAccount(b);
@@ -216,11 +218,13 @@ authRouter.post('/forgot', async (req, res) => {
   res.json({ ok: true });
 });
 
-authRouter.post('/reset', (req, res) => {
+authRouter.post('/reset', async (req, res) => {
   const b = z.object({ token: z.string().min(10).max(200), password: passwordSchema }).parse(req.body);
   const hash = crypto.createHash('sha256').update(b.token).digest('hex');
   const r = platformDb.prepare('SELECT * FROM password_resets WHERE token_hash = ?').get(hash) as any;
   if (!r || r.used || r.expires_at < nowSql()) throw new HttpError(400, 'The link is invalid or expired');
+  const owner = platformDb.prepare('SELECT email, name FROM users WHERE id = ?').get(r.user_id) as { email: string; name: string } | undefined;
+  await assertGoodPassword(b.password, owner ?? {});
   platformDb.transaction(() => {
     platformDb.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(bcrypt.hashSync(b.password, 10), r.user_id);
     platformDb.prepare('UPDATE password_resets SET used = 1 WHERE token_hash = ?').run(hash);
@@ -245,7 +249,7 @@ authRouter.get('/me', requireAuth, (req, res) => {
   });
 });
 
-authRouter.put('/me', requireAuth, (req, res) => {
+authRouter.put('/me', requireAuth, async (req, res) => {
   const body = z
     .object({
       name: z.string().min(1).max(100).optional(),
@@ -259,6 +263,7 @@ authRouter.put('/me', requireAuth, (req, res) => {
     if (req.impersonator) throw new HttpError(403, 'Support cannot change the client password');
     const row = platformDb.prepare('SELECT password_hash FROM users WHERE id = ?').get(u.id) as { password_hash: string };
     if (!body.current_password || !bcrypt.compareSync(body.current_password, row.password_hash)) throw new HttpError(400, 'Current password is incorrect');
+    await assertGoodPassword(body.new_password, { email: u.email, name: u.name });
     // Changing the password signs out all other sessions; the caller gets a fresh token.
     platformDb.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(bcrypt.hashSync(body.new_password, 10), u.id);
   }
@@ -294,10 +299,11 @@ usersRouter.get('/', (req, res) => {
   );
 });
 
-usersRouter.post('/', requireAccountAdmin, (req, res) => {
+usersRouter.post('/', requireAccountAdmin, async (req, res) => {
   const b = z
     .object({ email: z.string().email(), name: z.string().min(1).max(100), password: passwordSchema, role: z.enum(['admin', 'user']) })
     .parse(req.body);
+  await assertGoodPassword(b.password, { email: b.email, name: b.name, company: req.account!.name });
   const plan = planById(req.account!.plan);
   const count = (platformDb.prepare('SELECT COUNT(*) c FROM users WHERE account_id = ?').get(req.account!.id) as { c: number }).c;
   if (count >= plan.users) throw new HttpError(402, `Your plan allows ${plan.users} user(s). Upgrade the plan to add more.`);

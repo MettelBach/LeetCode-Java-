@@ -157,7 +157,7 @@ export function RegisterPage() {
         <Field label={t('Phone (optional)')}>
           <input className="input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} autoComplete="tel" />
         </Field>
-        <Field label={t('Password')} help={t('At least 8 characters')}>
+        <Field label={t('Password')} help={t('At least 8 characters, not a popular or leaked password')}>
           <input className="input" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={8} autoComplete="new-password" />
         </Field>
         <label className="check-label mb">
@@ -237,7 +237,7 @@ export function ResetPage() {
           }
         }}
       >
-        <Field label={t('New password')} help={t('At least 8 characters')}>
+        <Field label={t('New password')} help={t('At least 8 characters, not a popular or leaked password')}>
           <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoFocus autoComplete="new-password" />
         </Field>
         {error && <p className="error-text">{error}</p>}

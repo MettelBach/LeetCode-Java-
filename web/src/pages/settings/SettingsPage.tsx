@@ -761,7 +761,7 @@ function UsersTab() {
           <Field label="E-mail">
             <input className="input" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
           </Field>
-          <Field label={t('Password')} help={t('At least 8 characters')}>
+          <Field label={t('Password')} help={t('At least 8 characters, not a popular or leaked password')}>
             <input className="input" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} autoComplete="new-password" />
           </Field>
           <Field label={t('Role')}>
@@ -818,7 +818,7 @@ function AccountTab() {
         <Field label={t('Current password')}>
           <input className="input" type="password" value={pwd.current_password} onChange={(e) => setPwd({ ...pwd, current_password: e.target.value })} autoComplete="current-password" />
         </Field>
-        <Field label={t('New password')} help={t('At least 8 characters')}>
+        <Field label={t('New password')} help={t('At least 8 characters, not a popular or leaked password')}>
           <input className="input" type="password" value={pwd.new_password} onChange={(e) => setPwd({ ...pwd, new_password: e.target.value })} autoComplete="new-password" />
         </Field>
         <div className="row wrap">

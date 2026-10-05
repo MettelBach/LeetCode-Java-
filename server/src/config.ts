@@ -1,7 +1,33 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Development fallback for JWT_SECRET / SECRETS_KEY: a random value generated
+ * once and kept in <DATA_DIR>/.local-secrets.json (never a hardcoded string,
+ * so tokens cannot be forged on a server started without configuration).
+ * Production refuses to start without the environment variables (index.ts).
+ */
+export function localSecret(name: 'jwt' | 'secrets'): string {
+  const file = path.join(config.dataDir, '.local-secrets.json');
+  let all: Record<string, string> = {};
+  try {
+    all = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    /* first start */
+  }
+  if (!all[name]) {
+    all[name] = crypto.randomBytes(32).toString('hex');
+    fs.mkdirSync(config.dataDir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(all), { mode: 0o600 });
+  }
+  return all[name];
+}
+
+let jwtFallback: string | null = null;
 
 export const config = {
   /** Product name used in e-mails (the web app reads web/src/brand.ts). */
@@ -10,7 +36,9 @@ export const config = {
   /** Public URL of the app — used in links (order page, OAuth redirect). */
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
   dataDir: process.env.DATA_DIR ?? path.resolve(here, '../../data'),
-  jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
+  get jwtSecret(): string {
+    return process.env.JWT_SECRET || (jwtFallback ??= localSecret('jwt'));
+  },
   /** Directory with the built frontend, served in production. */
   webDist: process.env.WEB_DIST ?? path.resolve(here, '../../web/dist'),
   /** Disable background synchronization (tests). */
@@ -30,4 +58,6 @@ export const config = {
   trialDays: Number(process.env.TRIAL_DAYS ?? 14),
   /** Allow public sign-up of new accounts. */
   allowSignup: process.env.ALLOW_SIGNUP !== '0',
+  /** Check new passwords against known data breaches (Have I Been Pwned, k-anonymity). */
+  breachCheck: process.env.PASSWORD_BREACH_CHECK !== '0',
 };

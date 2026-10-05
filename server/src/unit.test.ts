@@ -7,6 +7,8 @@ import { openJson, sealJson } from './lib/secrets.js';
 import { base32Decode, base32Encode, totpCode, verifyTotp } from './lib/totp.js';
 import { backupAll } from './services/backup.js';
 import { marketplacePrice, marketplaceStock } from './integrations/sync.js';
+import { breachCount, weakPasswordReason } from './lib/password-policy.js';
+import { vi } from 'vitest';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -214,5 +216,25 @@ describe('marketplace price rules', () => {
     expect(marketplacePrice(45.5, { price_rounding: 'int' })).toBe(46);
     expect(marketplaceStock(10, { stock_reserve: 3 })).toBe(7);
     expect(marketplaceStock(2, { stock_reserve: 3 })).toBe(0);
+  });
+});
+
+describe('password policy', () => {
+  it('flags common and personal passwords', () => {
+    expect(weakPasswordReason('Password1')).toMatch(/too common/);
+    expect(weakPasswordReason('kowalski-2026', { email: 'jan.kowalski@x.pl', name: 'Jan Kowalski' })).toBeNull();
+    expect(weakPasswordReason('jankowalski99', { name: 'Jan Kowalski' })).toMatch(/e-mail, name or company/);
+    expect(weakPasswordReason('Kubek-Zielony-17', { email: 'a@a.pl', name: 'Anna' })).toBeNull();
+  });
+  it('checks breaches with k-anonymity (only a 5-char hash prefix is sent)', async () => {
+    // SHA-1("password") = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
+    const fetchMock = vi.fn(async (url: string) => ({ ok: true, text: async () => '1E4C9B93F3F0682250B6CF8331B7EE68FD8:9545824\r\nABC:0' }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await breachCount('password')).toBe(9545824);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.pwnedpasswords.com/range/5BAA6');
+    expect(await breachCount('Kubek-Zielony-17')).toBe(0);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    expect(await breachCount('anything')).toBe(0);
+    vi.unstubAllGlobals();
   });
 });

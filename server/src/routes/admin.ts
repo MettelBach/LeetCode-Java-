@@ -15,6 +15,7 @@ import {
 } from '../services/platform.js';
 import { checkRate, clearRate, failRate, passwordSchema, requireStaff, requireSuperadmin, signStaff, signUser } from './auth.js';
 import { staffReply } from './support.js';
+import { assertGoodPassword } from '../lib/password-policy.js';
 import { checkSecondFactor, resetSecondFactor, twoFactorRouter } from './two-factor.js';
 
 export const adminRouter = Router();
@@ -52,8 +53,9 @@ adminRouter.get('/me', (req, res) => {
 
 adminRouter.use('/me/2fa', twoFactorRouter('staff', (req) => req.staff?.id, (id) => signStaff(platformDb.prepare('SELECT id, token_version FROM staff WHERE id = ?').get(id) as any)));
 
-adminRouter.put('/me/password', (req, res) => {
+adminRouter.put('/me/password', async (req, res) => {
   const b = z.object({ current_password: z.string(), new_password: passwordSchema }).parse(req.body);
+  await assertGoodPassword(b.new_password, { email: req.staff!.email, name: req.staff!.name });
   const s = platformDb.prepare('SELECT password_hash FROM staff WHERE id = ?').get(req.staff!.id) as any;
   if (!bcrypt.compareSync(b.current_password, s.password_hash)) throw new HttpError(400, 'Current password is incorrect');
   platformDb.prepare('UPDATE staff SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(b.new_password, 10), req.staff!.id);
@@ -397,8 +399,9 @@ adminRouter.get('/staff', (_req, res) => {
   );
 });
 
-adminRouter.post('/staff', requireSuperadmin, (req, res) => {
+adminRouter.post('/staff', requireSuperadmin, async (req, res) => {
   const b = z.object({ email: z.string().email(), name: z.string().min(1).max(100), password: passwordSchema, role: z.enum(['superadmin', 'support']) }).parse(req.body);
+  await assertGoodPassword(b.password, b);
   if (platformDb.prepare('SELECT 1 FROM staff WHERE email = ?').get(b.email.toLowerCase())) throw new HttpError(409, 'Already exists');
   const r = platformDb
     .prepare('INSERT INTO staff (email, name, password_hash, role) VALUES (?, ?, ?, ?)')
@@ -407,11 +410,12 @@ adminRouter.post('/staff', requireSuperadmin, (req, res) => {
   res.json({ id: Number(r.lastInsertRowid) });
 });
 
-adminRouter.put('/staff/:id', requireSuperadmin, (req, res) => {
+adminRouter.put('/staff/:id', requireSuperadmin, async (req, res) => {
   const id = idParam(req);
   const b = z
     .object({ role: z.enum(['superadmin', 'support']).optional(), active: z.boolean().optional(), password: passwordSchema.optional(), reset_2fa: z.literal(true).optional() })
     .parse(req.body);
+  if (b.password) await assertGoodPassword(b.password);
   if (id === req.staff!.id && (b.active === false || b.role === 'support')) throw new HttpError(400, 'You cannot demote or deactivate yourself');
   const s = platformDb.prepare('SELECT * FROM staff WHERE id = ?').get(id) as any;
   if (!s) throw new HttpError(404, 'Not found');

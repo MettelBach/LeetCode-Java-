@@ -1153,4 +1153,8 @@ export const ru: Record<string, string> = {
   "no": "нет",
   "yes": "да",
   "— do not change —": "— не менять —",
+  "This password is too common — choose a less obvious one": "Этот пароль слишком распространён — выберите менее очевидный",
+  "The password must not contain your e-mail, name or company name": "Пароль не должен содержать e-mail, имя или название компании",
+  "This password appeared in a data breach — choose a different one": "Этот пароль встречается в утечках данных — выберите другой",
+  "At least 8 characters, not a popular or leaked password": "Минимум 8 символов, не популярный и не из утечек",
 };

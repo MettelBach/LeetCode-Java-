@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { config } from '../config.js';
 import { closeTenant, parseJson, platformDb, tenantDb, tenantFile } from '../db/index.js';
 import { HttpError } from '../lib/http.js';
+import { weakPasswordReason } from '../lib/password-policy.js';
 
 /* ----------------------------------- plans ----------------------------------- */
 
@@ -287,6 +288,11 @@ export function ensureBootstrapAdmin() {
   if (!config.adminEmail || !config.adminPassword) return;
   const email = config.adminEmail.toLowerCase();
   if (platformDb.prepare('SELECT 1 FROM staff WHERE email = ?').get(email)) return;
+  const weak = weakPasswordReason(config.adminPassword, { email });
+  if (weak) {
+    if (process.env.NODE_ENV === 'production') throw new Error(`ADMIN_PASSWORD is too weak: ${weak}`);
+    console.warn(`[platform] ADMIN_PASSWORD is weak: ${weak}`);
+  }
   platformDb
     .prepare(`INSERT INTO staff (email, name, password_hash, role) VALUES (?, ?, ?, 'superadmin')`)
     .run(email, 'Administrator', bcrypt.hashSync(config.adminPassword, 10));

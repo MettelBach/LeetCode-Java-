@@ -5,7 +5,7 @@ import { registerSyncListeners, startScheduler } from './integrations/sync.js';
 import { registerAutomation } from './services/automation.js';
 import { ensureBootstrapAdmin } from './services/platform.js';
 
-if (process.env.NODE_ENV === 'production' && (config.jwtSecret === 'dev-secret-change-me' || config.jwtSecret.length < 32)) {
+if (process.env.NODE_ENV === 'production' && (process.env.JWT_SECRET ?? '').length < 32) {
   console.error('JWT_SECRET must be set to a random string of at least 32 characters in production');
   process.exit(1);
 }
@@ -16,7 +16,12 @@ if (process.env.NODE_ENV === 'production' && (process.env.SECRETS_KEY ?? '').len
 }
 
 initPlatform(config.dataDir);
-ensureBootstrapAdmin();
+try {
+  ensureBootstrapAdmin();
+} catch (e: any) {
+  console.error(e.message);
+  process.exit(1);
+}
 registerAutomation();
 registerSyncListeners();
 startScheduler();

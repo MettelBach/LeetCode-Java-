@@ -1153,4 +1153,8 @@ export const pl: Record<string, string> = {
   "no": "nie",
   "yes": "tak",
   "— do not change —": "— nie zmieniaj —",
+  "This password is too common — choose a less obvious one": "To hasło jest zbyt popularne — wybierz mniej oczywiste",
+  "The password must not contain your e-mail, name or company name": "Hasło nie może zawierać e-maila, imienia ani nazwy firmy",
+  "This password appeared in a data breach — choose a different one": "To hasło wyciekło w jednym z wycieków danych — wybierz inne",
+  "At least 8 characters, not a popular or leaked password": "Min. 8 znaków, nie popularne i nie z wycieku",
 };

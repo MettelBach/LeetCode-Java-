@@ -29,7 +29,7 @@ await step('register account with demo data', async () => {
   await page.getByLabel('Company / store name').fill('E2E Sklep');
   await page.getByLabel('Your name').fill('Ewa Testowa');
   await page.getByLabel('E-mail').fill(email);
-  await page.getByLabel('Password').fill('password123');
+  await page.getByLabel('Password').fill('Kawa-Czarna-41');
   await page.getByRole('checkbox').nth(1).check();
   await page.getByRole('button', { name: 'Create account' }).click();
   await page.getByText('Hello, Ewa Testowa!').waitFor({ timeout: 30000 });

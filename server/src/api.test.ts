@@ -5,8 +5,9 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 process.env.DISABLE_SCHEDULER = '1';
+process.env.PASSWORD_BREACH_CHECK = '0';
 process.env.ADMIN_EMAIL = 'admin@test.pl';
-process.env.ADMIN_PASSWORD = 'adminpass123';
+process.env.ADMIN_PASSWORD = 'Panel-Admin-2026';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sellhub-test-'));
 process.env.DATA_DIR = dir;
 
@@ -57,12 +58,12 @@ describe('SaaS flow', () => {
   let productId = 0;
 
   it('registers two isolated accounts', async () => {
-    const a = await call('POST', '/auth/register', { company: 'Sklep A', name: 'Anna', email: 'a@a.pl', password: 'password1', accept_terms: true });
+    const a = await call('POST', '/auth/register', { company: 'Sklep A', name: 'Anna', email: 'a@a.pl', password: 'Kubek-Zielony-17', accept_terms: true });
     expect(a.status).toBe(200);
     tokenA = a.data.token;
-    const b = await call('POST', '/auth/register', { company: 'Sklep B', name: 'Bartek', email: 'b@b.pl', password: 'password2', accept_terms: true });
+    const b = await call('POST', '/auth/register', { company: 'Sklep B', name: 'Bartek', email: 'b@b.pl', password: 'Rower-Niebieski-23', accept_terms: true });
     tokenB = b.data.token;
-    const dup = await call('POST', '/auth/register', { company: 'X', name: 'X', email: 'a@a.pl', password: 'password1', accept_terms: true });
+    const dup = await call('POST', '/auth/register', { company: 'X', name: 'X', email: 'a@a.pl', password: 'Kubek-Zielony-17', accept_terms: true });
     expect(dup.status).toBe(409);
     const me = await call('GET', '/auth/me', undefined, tokenA);
     expect(me.data.account.name).toBe('Sklep A');
@@ -72,7 +73,7 @@ describe('SaaS flow', () => {
   it('rejects unauthenticated and wrong-password requests', async () => {
     expect((await call('GET', '/orders')).status).toBe(401);
     expect((await call('POST', '/auth/login', { email: 'a@a.pl', password: 'nope' })).status).toBe(401);
-    expect((await call('POST', '/auth/login', { email: 'a@a.pl', password: 'password1' })).status).toBe(200);
+    expect((await call('POST', '/auth/login', { email: 'a@a.pl', password: 'Kubek-Zielony-17' })).status).toBe(200);
   });
 
   it('creates a product with stock in the default warehouse', async () => {
@@ -178,7 +179,7 @@ describe('SaaS flow', () => {
     expect(t.status).toBe(200);
     // Clients cannot reach the admin API.
     expect((await call('GET', '/admin/accounts', undefined, tokenA)).status).toBe(401);
-    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
+    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'Panel-Admin-2026' });
     expect(login.status).toBe(200);
     const staff = login.data.token;
     // Staff token cannot be used as a client token.
@@ -204,7 +205,7 @@ describe('SaaS flow', () => {
   });
 
   it('suspended accounts are read-only', async () => {
-    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
+    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'Panel-Admin-2026' });
     const accounts = await call('GET', '/admin/accounts?search=Sklep B', undefined, login.data.token);
     await call('PUT', `/admin/accounts/${accounts.data.rows[0].id}`, { status: 'suspended' }, login.data.token);
     expect((await call('GET', '/orders', undefined, tokenB)).status).toBe(200);
@@ -242,7 +243,7 @@ describe('SaaS flow', () => {
   });
 
   it('changing the password signs out other sessions', async () => {
-    const r = await call('PUT', '/auth/me', { current_password: 'password1', new_password: 'password1-new' }, tokenA);
+    const r = await call('PUT', '/auth/me', { current_password: 'Kubek-Zielony-17', new_password: 'Kubek-Zielony-18' }, tokenA);
     expect(r.status).toBe(200);
     expect(r.data.token).toBeTruthy();
     expect((await call('GET', '/auth/me', undefined, tokenA)).status).toBe(401);
@@ -251,11 +252,11 @@ describe('SaaS flow', () => {
 
   it('stores sign-up attribution and exports Google Ads conversions', async () => {
     const r = await call('POST', '/auth/register', {
-      company: 'Sklep Ads', name: 'Celina', email: 'ads@c.pl', password: 'password3', accept_terms: true,
+      company: 'Sklep Ads', name: 'Celina', email: 'ads@c.pl', password: 'Lampa-Biurowa-58', accept_terms: true,
       attribution: { utm_source: 'google', utm_medium: 'cpc\r=1+1', gclid: 'Cj0KTEST', fbclid: 'x\r=HYPERLINK("a")', evil: 'x' },
     });
     expect(r.status).toBe(200);
-    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
+    const login = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'Panel-Admin-2026' });
     const list = await call('GET', '/admin/accounts?search=Sklep Ads', undefined, login.data.token);
     const acc = list.data.rows[0];
     expect(acc.source).toBe('google / cpc=1+1');
@@ -270,7 +271,7 @@ describe('SaaS flow', () => {
   });
 
   it('public REST API works with API tokens and respects the API limit', async () => {
-    const login = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
+    const login = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58' });
     const t = login.data.token;
     const created = await call('POST', '/api-tokens', { name: 'Sklep WWW' }, t);
     expect(created.status).toBe(201);
@@ -327,7 +328,7 @@ describe('SaaS flow', () => {
 
   it('two-factor authentication for client users, reset by support', async () => {
     const { totpCode, currentStep } = await import('./lib/totp.js');
-    const login = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
+    const login = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58' });
     const t = login.data.token;
     const setup = await call('POST', '/auth/2fa/setup', {}, t);
     expect(setup.data.otpauth).toContain('otpauth://totp/');
@@ -339,19 +340,26 @@ describe('SaaS flow', () => {
     expect((await call('GET', '/auth/2fa', undefined, t)).status).toBe(401);
     expect((await call('GET', '/auth/2fa', undefined, enabled.data.token)).data.enabled).toBe(true);
 
-    const noCode = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' });
+    const noCode = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58' });
     expect(noCode.data).toEqual({ two_factor_required: true });
-    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3', code: '123456' })).status).toBe(401);
+    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58', code: '123456' })).status).toBe(401);
     // The code used to enable 2FA cannot be used again.
-    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3', code: totpCode(setup.data.secret, step) })).status).toBe(401);
-    const ok = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3', code: totpCode(setup.data.secret, step + 1) });
+    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58', code: totpCode(setup.data.secret, step) })).status).toBe(401);
+    const ok = await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58', code: totpCode(setup.data.secret, step + 1) });
     expect(ok.data.token).toBeTruthy();
 
-    const admin = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'adminpass123' });
+    const admin = await call('POST', '/admin/login', { email: 'admin@test.pl', password: 'Panel-Admin-2026' });
     const acc = (await call('GET', '/admin/accounts?search=Sklep Ads', undefined, admin.data.token)).data.rows[0];
     const detail = await call('GET', `/admin/accounts/${acc.id}`, undefined, admin.data.token);
     expect(detail.data.users[0].totp_enabled).toBe(1);
     await call('POST', `/admin/accounts/${acc.id}/users/${detail.data.users[0].id}/reset-2fa`, {}, admin.data.token);
-    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'password3' })).data.token).toBeTruthy();
+    expect((await call('POST', '/auth/login', { email: 'ads@c.pl', password: 'Lampa-Biurowa-58' })).data.token).toBeTruthy();
+  });
+
+  it('rejects common passwords and passwords built from personal data', async () => {
+    const reg = (password: string) => call('POST', '/auth/register', { company: 'Sklep Weak', name: 'Weronika', email: 'weronika@w.pl', password, accept_terms: true });
+    expect((await reg('password123')).data.error).toMatch(/too common/);
+    expect((await reg('weronika2026!')).data.error).toMatch(/e-mail, name or company/);
+    expect((await reg('aaaaaaaa1')).status).toBe(400);
   });
 });
