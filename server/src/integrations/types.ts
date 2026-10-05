@@ -1,6 +1,6 @@
 import type { OrderInput } from '../services/orders.js';
 
-export type IntegrationType = 'allegro' | 'empik' | 'kaufland';
+export type IntegrationType = 'allegro' | 'empik' | 'kaufland' | 'olx';
 
 export interface IntegrationRow {
   id: number;
@@ -123,4 +123,5 @@ export const STATUS_CODES: Record<IntegrationType, string[]> = {
   allegro: ['NEW', 'PROCESSING', 'READY_FOR_SHIPMENT', 'READY_FOR_PICKUP', 'SENT', 'PICKED_UP', 'CANCELLED', 'SUSPENDED', 'RETURNED'],
   empik: ['accept', 'ship', 'cancel'],
   kaufland: ['send', 'cancel'],
+  olx: [],
 };

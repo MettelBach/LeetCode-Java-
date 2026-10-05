@@ -211,7 +211,7 @@ export function updateOrder(id: number, patch: Record<string, any>, user = 'Syst
   if (!(changes.length === 1 && changes[0] === 'star')) addHistory(id, `Order data changed: ${changes.join(', ')}`, 'edit', user);
 }
 
-export function changeStatus(id: number, statusId: number, user = 'System', meta: { depth?: number; ruleIds?: number[] } = {}) {
+export function changeStatus(id: number, statusId: number, user = 'System', meta: { depth?: number; ruleIds?: number[]; originIntegrationId?: number } = {}) {
   const o = getOrder(id);
   if (o.status_id === statusId) return false;
   const st = db.prepare('SELECT id, name, system_key FROM order_statuses WHERE id = ?').get(statusId) as

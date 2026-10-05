@@ -8,6 +8,7 @@ import { base32Decode, base32Encode, totpCode, verifyTotp } from './lib/totp.js'
 import { backupAll } from './services/backup.js';
 import { marketplacePrice, marketplaceStock } from './integrations/sync.js';
 import { breachCount, weakPasswordReason } from './lib/password-policy.js';
+import { mapAdvert } from './integrations/olx.js';
 import { vi } from 'vitest';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
@@ -236,5 +237,14 @@ describe('password policy', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
     expect(await breachCount('anything')).toBe(0);
     vi.unstubAllGlobals();
+  });
+});
+
+describe('OLX', () => {
+  it('maps adverts to offers (no quantity on OLX: active = available)', () => {
+    const o = mapAdvert({ id: 901, title: 'Rower', status: 'active', external_id: 'ROW-1', price: { value: 450, currency: 'PLN' }, url: 'https://www.olx.pl/d/oferta/rower-ID1.html', images: [{ url: 'https://x/1.jpg' }] });
+    expect(o).toMatchObject({ external_id: '901', sku: 'ROW-1', price: 450, stock: 1, status: 'active', image: 'https://x/1.jpg' });
+    expect(mapAdvert({ id: 2, status: 'removed_by_user' }).status).toBe('ended');
+    expect(mapAdvert({ id: 3, status: 'limited' }).stock).toBe(0);
   });
 });

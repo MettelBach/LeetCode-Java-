@@ -121,4 +121,12 @@ export const platformMigrations: string[] = [
    ALTER TABLE staff ADD COLUMN totp_secret TEXT;
    ALTER TABLE staff ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
    ALTER TABLE staff ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;`,
+  // OAuth "authorization code" flows (OLX): state → account and integration.
+  `CREATE TABLE oauth_states (
+    state TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    integration_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );`,
 ];

@@ -4,8 +4,8 @@ import { openJson, sealJson } from '../lib/secrets.js';
 import { availableStock } from '../services/stock.js';
 import { backupAll } from '../services/backup.js';
 import { config } from '../config.js';
-import { db, parseJson, runWithTenant } from '../db/index.js';
-import { notFound } from '../lib/http.js';
+import { currentAccountId, db, parseJson, runWithTenant } from '../db/index.js';
+import { HttpError, notFound } from '../lib/http.js';
 import { onEvent } from '../services/events.js';
 import { addHistory, changeStatus, createOrder, getOrder, statusIdByKey } from '../services/orders.js';
 import {
@@ -23,12 +23,14 @@ import { AllegroConnector } from './allegro.js';
 import { DemoConnector } from './demo.js';
 import { EmpikConnector } from './empik.js';
 import { KauflandConnector } from './kaufland.js';
+import { OlxConnector } from './olx.js';
 import type { Connector, ConnectorContext, IntegrationRow, IntegrationSettings } from './types.js';
 
 export const DEFAULT_SETTINGS: Record<string, IntegrationSettings> = {
   allegro: { import_days: 7, send_tracking: true, sync_stock: true, sync_price: false, auto_link: true, sync_cancel: true, status_map: {} },
   empik: { import_days: 7, send_tracking: true, sync_stock: true, sync_price: false, auto_link: true, sync_cancel: true, auto_accept: true, status_map: {} },
   kaufland: { import_days: 7, send_tracking: true, sync_stock: true, sync_price: false, auto_link: true, sync_cancel: true, status_map: {} },
+  olx: { import_days: 7, send_tracking: false, sync_stock: true, sync_price: false, auto_link: true, sync_cancel: false, status_map: {} },
 };
 
 export function loadIntegration(id: number): IntegrationRow {
@@ -66,6 +68,10 @@ export function connectorFor(integration: IntegrationRow): Connector {
       return new EmpikConnector(ctx);
     case 'kaufland':
       return new KauflandConnector(ctx);
+    case 'olx':
+      return new OlxConnector(ctx);
+    default:
+      throw new HttpError(400, `Integration type ${integration.type} is not available yet`);
   }
 }
 
@@ -73,13 +79,15 @@ function notify(message: string, type = 'info', link = '') {
   db.prepare('INSERT INTO notifications (type, message, link) VALUES (?, ?, ?)').run(type, message, link);
 }
 
-const running = new Set<number>();
+/** Integrations being synchronized right now (key: account:integration — ids are per account). */
+const running = new Set<string>();
 
 /** Downloads new/updated orders from a marketplace account. */
 export async function syncOrders(id: number) {
-  if (running.has(id)) return { imported: 0, updated: 0, skipped: true };
-  running.add(id);
   const integration = loadIntegration(id);
+  const lockKey = `${currentAccountId() ?? 0}:${id}`;
+  if (running.has(lockKey)) return { imported: 0, updated: 0, skipped: true };
+  running.add(lockKey);
   let imported = 0;
   let updated = 0;
   try {
@@ -114,7 +122,7 @@ export async function syncOrders(id: number) {
         if (mo.canceled && integration.settings.sync_cancel) {
           const canceled = statusIdByKey('canceled');
           if (existing.status_id !== canceled) {
-            changeStatus(existing.id, canceled, integration.name);
+            changeStatus(existing.id, canceled, integration.name, { originIntegrationId: id });
             patch.push('canceled by marketplace');
           }
         }
@@ -140,7 +148,7 @@ export async function syncOrders(id: number) {
     syncLog(id, `Order sync failed: ${e.message}`, 'error');
     throw e;
   } finally {
-    running.delete(id);
+    running.delete(lockKey);
   }
 }
 
@@ -155,7 +163,8 @@ export async function syncOffers(id: number) {
        ON CONFLICT(integration_id, external_id) DO UPDATE SET title = excluded.title, sku = excluded.sku,
          ean = CASE WHEN excluded.ean != '' THEN excluded.ean ELSE offers.ean END, price = excluded.price, currency = excluded.currency,
          stock = excluded.stock, status = excluded.status, url = excluded.url, image = excluded.image, raw = excluded.raw,
-         product_id = COALESCE(offers.product_id, excluded.product_id), last_synced_at = datetime('now')`,
+         product_id = CASE WHEN offers.link_locked = 1 THEN offers.product_id ELSE COALESCE(offers.product_id, excluded.product_id) END,
+         missing_since = NULL, last_synced_at = datetime('now')`,
     );
     let linked = 0;
     db.transaction(() => {
@@ -267,6 +276,7 @@ export async function sendTrackingToSource(shipmentId: number) {
   const o = getOrder(s.order_id);
   if (!o.integration_id || !o.external_id) throw new Error('Order does not come from a marketplace');
   const integration = loadIntegration(o.integration_id);
+  if (s.simulated && !integration.demo) throw new HttpError(409, 'This is a test tracking number (courier not connected) — enter the real tracking number first');
   await connectorFor(integration).sendTracking(orderForConnector(o.id), { courier: s.courier, tracking_number: s.tracking_number });
   db.prepare(`UPDATE shipments SET sent_to_source = 1, sent_to_source_at = datetime('now') WHERE id = ?`).run(shipmentId);
   addHistory(o.id, `Tracking number ${s.tracking_number} sent to ${integration.name}`, 'sync', 'System');
@@ -279,8 +289,12 @@ export function registerSyncListeners() {
       if (!o.integration_id || !o.external_id) return;
       const integration = loadIntegration(o.integration_id);
       if (!integration.enabled) return;
+      // A change that came from this marketplace is not sent back to it.
+      if (payload.originIntegrationId === integration.id) return;
       const code = integration.settings.status_map?.[String(payload.toStatusId)];
       if (!code) return;
+      // Empik: "ship" was already confirmed together with the tracking number.
+      if (code === 'ship' && db.prepare('SELECT 1 FROM shipments WHERE order_id = ? AND sent_to_source = 1').get(o.id)) return;
       try {
         await connectorFor(integration).setOrderStatus(orderForConnector(o.id), code);
         addHistory(o.id, `Status "${code}" sent to ${integration.name}`, 'sync', 'System');
@@ -294,6 +308,11 @@ export function registerSyncListeners() {
       if (!o.integration_id || !o.external_id) return;
       const integration = loadIntegration(o.integration_id);
       if (!integration.enabled || !integration.settings.send_tracking) return;
+      const sh = db.prepare('SELECT simulated FROM shipments WHERE id = ?').get(Number(payload.shipmentId)) as { simulated: number } | undefined;
+      if (sh?.simulated && !integration.demo) {
+        addHistory(o.id, `Tracking number not sent to ${integration.name}: test number (courier not connected)`, 'info', 'System');
+        return;
+      }
       try {
         await sendTrackingToSource(Number(payload.shipmentId));
       } catch (e: any) {

@@ -565,4 +565,31 @@ export const migrations: string[] = [
   CREATE INDEX idx_doc_items_doc ON warehouse_doc_items(doc_id);
   CREATE INDEX idx_doc_items_product ON warehouse_doc_items(product_id);
   `,
+  // 3: integrations of any type (catalog with categories: marketplaces, shops, couriers, invoicing…),
+  // manual offer links that sync must not override, simulated shipments that are never sent to marketplaces.
+  `-- nofk
+  CREATE TABLE integrations_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'marketplace',
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    demo INTEGER NOT NULL DEFAULT 0,
+    credentials TEXT NOT NULL DEFAULT '{}',
+    settings TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT '{}',
+    last_sync_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  INSERT INTO integrations_new (id, type, category, name, enabled, demo, credentials, settings, state, last_sync_at, last_error, created_at)
+    SELECT id, type, 'marketplace', name, enabled, demo, credentials, settings, state, last_sync_at, last_error, created_at FROM integrations;
+  DROP TABLE integrations;
+  ALTER TABLE integrations_new RENAME TO integrations;
+  ALTER TABLE offers ADD COLUMN link_locked INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE offers ADD COLUMN missing_since TEXT;
+  ALTER TABLE shipments ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE shipments ADD COLUMN integration_id INTEGER REFERENCES integrations(id) ON DELETE SET NULL;
+  ALTER TABLE shipments ADD COLUMN external_id TEXT NOT NULL DEFAULT '';
+  `,
 ];

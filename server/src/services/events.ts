@@ -20,6 +20,8 @@ export interface EventPayload {
   /** Rule id that caused this event, used to stop infinite rule loops. */
   depth?: number;
   ruleIds?: number[];
+  /** Integration id when the change came from that marketplace (not sent back to it). */
+  originIntegrationId?: number;
   [k: string]: unknown;
 }
 

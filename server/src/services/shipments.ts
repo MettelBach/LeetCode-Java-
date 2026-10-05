@@ -53,15 +53,19 @@ export function createShipment(orderId: number, input: ShipmentInput, user = 'Sy
     input.weight ??
     (db.prepare('SELECT COALESCE(SUM(weight * quantity), 0) w FROM order_items WHERE order_id = ?').get(orderId) as { w: number }).w;
   const cod = input.cod_amount ?? (o.payment_cod ? Math.max(0, orderTotal(orderId) - o.paid_amount) : 0);
+  if (o.deleted) throw new HttpError(409, 'The order is in the bin');
+  // Without a connected courier API and without a real tracking number the shipment is only a
+  // simulation (test label): its number is never sent to a marketplace or a customer.
+  const simulated = input.tracking_number?.trim() ? 0 : 1;
   const tracking = input.tracking_number?.trim() || generateTrackingNumber(input.courier);
   const r = db
     .prepare(
-      `INSERT INTO shipments (order_id, courier, account_name, service, tracking_number, weight, size, cod_amount, insurance)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO shipments (order_id, courier, account_name, service, tracking_number, weight, size, cod_amount, insurance, simulated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(orderId, input.courier, input.account_name ?? courierName(input.courier), input.service ?? '', tracking, weight, input.size ?? '', cod, input.insurance ?? 0);
+    .run(orderId, input.courier, input.account_name ?? courierName(input.courier), input.service ?? '', tracking, weight, input.size ?? '', cod, input.insurance ?? 0, simulated);
   const id = Number(r.lastInsertRowid);
-  addHistory(orderId, `Shipment created: ${courierName(input.courier)} ${tracking}`, 'shipment', user);
+  addHistory(orderId, `Shipment created: ${courierName(input.courier)} ${tracking}${simulated ? ' (test number — courier not connected)' : ''}`, 'shipment', user);
   emit('shipment_created', { orderId, user, shipmentId: id, ...meta });
   return id;
 }
@@ -101,7 +105,7 @@ export function advanceSimulatedTracking() {
   const flow = ['label_printed', 'picked_up', 'in_transit', 'out_for_delivery', 'delivered'];
   const rows = db
     .prepare(
-      `SELECT id, status FROM shipments WHERE status IN ('label_printed','picked_up','in_transit','out_for_delivery')
+      `SELECT id, status FROM shipments WHERE simulated = 1 AND status IN ('label_printed','picked_up','in_transit','out_for_delivery')
        AND status_date <= datetime('now', '-6 hours')`,
     )
     .all() as { id: number; status: string }[];

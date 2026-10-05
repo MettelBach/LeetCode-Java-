@@ -11,6 +11,7 @@ const URLS: Record<IntegrationType, (id: string) => string> = {
   allegro: (id) => `https://allegro.pl/oferta/${id}`,
   empik: (id) => `https://www.empik.com/p,${id},p`,
   kaufland: (id) => `https://www.kaufland.pl/product/${id}/`,
+  olx: (id) => `https://www.olx.pl/d/oferta/${id}`,
 };
 
 function strip(s: string) {
@@ -27,9 +28,16 @@ export class DemoConnector implements Connector {
     let offers = this.ctx.integration.state.demo_offers as MarketplaceOffer[] | undefined;
     if (!offers) {
       offers = DEMO_PRODUCTS.filter((p) => p.markets.includes(this.type)).map((p, i) => {
-        const id = this.type === 'allegro' ? String(14000000000 + rndInt(1, 999999999)) : this.type === 'kaufland' ? String(400000000 + i * 7919) : `P${1000 + i}`;
+        const id =
+          this.type === 'allegro'
+            ? String(14000000000 + rndInt(1, 999999999))
+            : this.type === 'kaufland'
+              ? String(400000000 + i * 7919)
+              : this.type === 'olx'
+                ? String(900000000 + rndInt(1, 99999999))
+                : `P${1000 + i}`;
         // Marketplace prices differ slightly from the shop price.
-        const markup = this.type === 'kaufland' ? 1.05 : this.type === 'empik' ? 0.98 : 1;
+        const markup = this.type === 'kaufland' ? 1.05 : this.type === 'empik' ? 0.98 : this.type === 'olx' ? 0.95 : 1;
         return {
           external_id: id,
           title: p.name,
@@ -123,6 +131,8 @@ export class DemoConnector implements Connector {
   }
 
   async fetchOrders(since: string) {
+    // OLX: adverts only (orders are not available in the OLX Partner API).
+    if (this.type === 'olx') return [];
     const st = this.ctx.integration.state;
     const out: MarketplaceOrder[] = [];
     if (!st.demo_initialized) {

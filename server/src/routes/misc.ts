@@ -7,6 +7,9 @@ import { ACTION_TYPES, CONDITION_FIELDS, EVENTS, runRulesFor } from '../services
 import { orderTotal } from '../services/orders.js';
 import { assertPublicHttpsUrl } from '../lib/net.js';
 import { requireAdmin, userName } from './auth.js';
+import { config } from '../config.js';
+import { olxExchangeCode } from '../integrations/olx.js';
+import { loadIntegration, saveState, syncLog } from '../integrations/sync.js';
 
 /* ----------------------------- automatic actions ----------------------------- */
 
@@ -313,6 +316,30 @@ miscRouter.get('/search', (req, res) => {
 /* ------------------------ public order page for the buyer ------------------------ */
 
 export const publicRouter = Router();
+
+/** OAuth return from OLX: exchanges the code for tokens and goes back to the integration settings. */
+publicRouter.get('/oauth/olx/callback', async (req, res) => {
+  const state = q.str(req.query.state) ?? '';
+  const row = platformDb.prepare(`SELECT * FROM oauth_states WHERE state = ? AND type = 'olx' AND created_at >= datetime('now', '-1 hour')`).get(state) as
+    | { account_id: number; integration_id: number }
+    | undefined;
+  if (!row) return void res.status(400).send('Invalid or expired authorization link. Start the authorization again in the panel.');
+  platformDb.prepare('DELETE FROM oauth_states WHERE state = ?').run(state);
+  const back = `${config.appUrl}/integrations/${row.integration_id}`;
+  if (req.query.error || !q.str(req.query.code)) return void res.redirect(`${back}?oauth=denied`);
+  try {
+    await runWithTenant(row.account_id, async () => {
+      const integration = loadIntegration(row.integration_id);
+      const t = await olxExchangeCode(integration.credentials as any, q.str(req.query.code)!);
+      saveState(integration.id, { access_token: t.access_token, refresh_token: t.refresh_token, expires_at: Date.now() + t.expires_in * 1000 });
+      syncLog(integration.id, 'OLX account authorized');
+    });
+    res.redirect(`${back}?oauth=ok`);
+  } catch (e: any) {
+    console.error('[olx] authorization failed', e?.message);
+    res.redirect(`${back}?oauth=error`);
+  }
+});
 
 publicRouter.get('/order/:account/:id/:token', (req, res) => {
   const accountId = idParam(req, 'account');

@@ -21,11 +21,31 @@ import {
   syncOrders,
 } from '../integrations/sync.js';
 import { STATUS_CODES } from '../integrations/types.js';
+import { CONNECTABLE, descriptor, INTEGRATIONS } from '../integrations/registry.js';
+import { olxAuthorizeUrl } from '../integrations/olx.js';
+import { currentAccountId, platformDb } from '../db/index.js';
+import crypto from 'node:crypto';
 import { planById } from '../services/platform.js';
 import { requireAdmin, userName } from './auth.js';
 import { adjustStock, catalogWarehouseId, defaultCatalogId, defaultPriceGroupId } from '../services/stock.js';
 
 export const integrationsRouter = Router();
+
+/** Whether the account can talk to the marketplace (keys present / OAuth done). */
+function isAuthorized(type: string, demo: boolean, creds: Record<string, any>, state: Record<string, any>) {
+  if (demo) return true;
+  switch (type) {
+    case 'allegro':
+    case 'olx':
+      return !!state.refresh_token;
+    case 'empik':
+      return !!creds.api_key;
+    case 'kaufland':
+      return !!creds.client_key && !!creds.secret_key;
+    default:
+      return false;
+  }
+}
 
 /** Never send secrets back to the browser — only whether they are set. */
 function publicView(row: any) {
@@ -51,7 +71,8 @@ function publicView(row: any) {
     demo: !!row.demo,
     credentials: masked,
     settings: { ...DEFAULT_SETTINGS[row.type], ...parseJson(row.settings, {}) },
-    authorized: row.type !== 'allegro' || !!row.demo || !!state.refresh_token,
+    category: row.category ?? 'marketplace',
+    authorized: isAuthorized(row.type, !!row.demo, creds, state),
     auth_pending: state.device_auth ? { user_code: state.device_auth.user_code, url: state.device_auth.verification_uri_complete } : null,
     last_sync_at: row.last_sync_at,
     last_error: row.last_error,
@@ -62,6 +83,12 @@ function publicView(row: any) {
 
 integrationsRouter.get('/meta', (_req, res) => {
   res.json({ status_codes: STATUS_CODES, defaults: DEFAULT_SETTINGS, empik_default_url: EMPIK_DEFAULT_URL });
+});
+
+/** Integrations catalog ("Dodaj integrację") with the number of connected accounts. */
+integrationsRouter.get('/catalog', (_req, res) => {
+  const counts = Object.fromEntries((db.prepare('SELECT type, COUNT(*) c FROM integrations GROUP BY type').all() as any[]).map((r) => [r.type, r.c]));
+  res.json(INTEGRATIONS.map((d) => ({ ...d, connected: counts[d.type] ?? 0 })));
 });
 
 integrationsRouter.get('/', (_req, res) => {
@@ -104,8 +131,24 @@ const settingsSchema = z
     price_add: z.number().min(-10000).max(10000),
     price_rounding: z.enum(['none', '99', 'int']),
     stock_reserve: z.number().int().min(0).max(100000),
+    olx_city_id: z.number().int().nullable(),
+    olx_contact_name: z.string().max(100),
+    olx_contact_phone: z.string().max(30),
+    olx_advertiser_type: z.enum(['business', 'private']),
   })
   .partial();
+
+/** Rejects settings pointing at statuses, warehouses, catalogs or price groups that do not exist. */
+function checkSettings(st: Record<string, any> | undefined) {
+  if (!st) return;
+  const exists = (table: string, id: unknown) => !!db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(id);
+  if (st.import_status_id && !exists('order_statuses', st.import_status_id)) throw new HttpError(400, 'Unknown order status');
+  for (const k of Object.keys(st.status_map ?? {})) if (!exists('order_statuses', Number(k))) throw new HttpError(400, 'Unknown order status');
+  if (st.warehouse_id && !exists('warehouses', st.warehouse_id)) throw new HttpError(400, 'Unknown warehouse');
+  for (const w of st.stock_warehouse_ids ?? []) if (!exists('warehouses', w)) throw new HttpError(400, 'Unknown warehouse');
+  if (st.catalog_id && !exists('catalogs', st.catalog_id)) throw new HttpError(400, 'Unknown catalog');
+  if (st.price_group_id && !exists('price_groups', st.price_group_id)) throw new HttpError(400, 'Unknown price group');
+}
 
 integrationsRouter.post('/', requireAdmin, (req, res) => {
   const plan = planById(req.account!.plan);
@@ -113,7 +156,7 @@ integrationsRouter.post('/', requireAdmin, (req, res) => {
   if (count >= plan.integrations) throw new HttpError(402, `Your plan allows ${plan.integrations} integration(s). Upgrade the plan to add more.`);
   const b = z
     .object({
-      type: z.enum(['allegro', 'empik', 'kaufland']),
+      type: z.string().refine((v) => CONNECTABLE.includes(v), 'This integration is not available yet'),
       name: z.string().min(1).max(100),
       demo: z.boolean().optional(),
       credentials: credSchema.optional(),
@@ -121,9 +164,10 @@ integrationsRouter.post('/', requireAdmin, (req, res) => {
     })
     .parse(req.body);
   checkCredentials(b.credentials);
+  checkSettings(b.settings);
   const r = db
-    .prepare('INSERT INTO integrations (type, name, demo, credentials, settings) VALUES (?, ?, ?, ?, ?)')
-    .run(b.type, b.name, b.demo ? 1 : 0, sealJson(b.credentials ?? {}), JSON.stringify({ ...DEFAULT_SETTINGS[b.type], ...(b.settings ?? {}) }));
+    .prepare('INSERT INTO integrations (type, category, name, demo, credentials, settings) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(b.type, descriptor(b.type)?.category ?? 'marketplace', b.name, b.demo ? 1 : 0, sealJson(b.credentials ?? {}), JSON.stringify({ ...DEFAULT_SETTINGS[b.type], ...(b.settings ?? {}) }));
   res.json({ id: Number(r.lastInsertRowid) });
 });
 
@@ -149,6 +193,7 @@ integrationsRouter.put('/:id', requireAdmin, (req, res) => {
     }
   }
   checkCredentials(creds);
+  checkSettings(b.settings);
   const settings = { ...parseJson(row.settings, {}), ...(b.settings ?? {}) };
   db.prepare('UPDATE integrations SET name = ?, enabled = ?, demo = ?, credentials = ?, settings = ? WHERE id = ?').run(
     b.name ?? row.name,
@@ -187,14 +232,28 @@ integrationsRouter.post('/:id/sync-orders', async (req, res) => {
   try {
     res.json(await syncOrders(idParam(req)));
   } catch (e: any) {
+    if (e instanceof HttpError) throw e;
     throw new HttpError(502, e.message);
   }
+});
+
+/** Starts OLX authorization: returns the OLX login URL (the seller comes back to /api/public/oauth/olx/callback). */
+integrationsRouter.post('/:id/olx/authorize', requireAdmin, (req, res) => {
+  const integration = loadIntegration(idParam(req));
+  if (integration.type !== 'olx') throw new HttpError(400, 'Not an OLX integration');
+  const clientId = String(integration.credentials.client_id ?? '');
+  if (!clientId || !integration.credentials.client_secret) throw new HttpError(400, 'Enter Client ID and Client Secret and save first');
+  const state = crypto.randomBytes(24).toString('hex');
+  platformDb.prepare(`DELETE FROM oauth_states WHERE created_at < datetime('now', '-1 hour')`).run();
+  platformDb.prepare('INSERT INTO oauth_states (state, account_id, integration_id, type) VALUES (?, ?, ?, ?)').run(state, currentAccountId(), integration.id, 'olx');
+  res.json({ url: olxAuthorizeUrl(clientId, state) });
 });
 
 integrationsRouter.post('/:id/sync-offers', async (req, res) => {
   try {
     res.json(await syncOffers(idParam(req)));
   } catch (e: any) {
+    if (e instanceof HttpError) throw e;
     throw new HttpError(502, e.message);
   }
 });
@@ -296,10 +355,11 @@ offersRouter.put('/:id', (req, res) => {
   const cur = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as any;
   if (!cur) throw new HttpError(404, 'Offer not found');
   if (b.product_id && !db.prepare('SELECT 1 FROM products WHERE id = ?').get(b.product_id)) throw new HttpError(400, 'Product not found');
-  db.prepare('UPDATE offers SET product_id = ?, sync_stock = ?, sync_price = ? WHERE id = ?').run(
+  db.prepare('UPDATE offers SET product_id = ?, sync_stock = ?, sync_price = ?, link_locked = CASE WHEN ? THEN 1 ELSE link_locked END WHERE id = ?').run(
     b.product_id !== undefined ? b.product_id : cur.product_id,
     b.sync_stock === undefined ? cur.sync_stock : b.sync_stock ? 1 : 0,
     b.sync_price === undefined ? cur.sync_price : b.sync_price ? 1 : 0,
+    b.product_id !== undefined ? 1 : 0,
     id,
   );
   res.json({ ok: true });
@@ -341,13 +401,21 @@ offersRouter.post('/push', async (req, res) => {
   res.json(await pushOffers(null, { offerIds: b.ids, force: true }));
 });
 
+/** An offer that can be changed on the marketplace (active integration, offer not ended). */
+function editableOffer(id: number) {
+  const off = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as any;
+  if (!off) throw new HttpError(404, 'Offer not found');
+  const integration = loadIntegration(off.integration_id);
+  if (!integration.enabled) throw new HttpError(409, 'The integration is disabled');
+  if (off.status === 'ended') throw new HttpError(409, 'The offer is ended — activate it first');
+  return { off, integration };
+}
+
 offersRouter.post('/:id/update', async (req, res) => {
   // Manual edit of a single offer's stock/price directly on the marketplace.
   const id = idParam(req);
   const b = z.object({ stock: z.number().int().min(0).optional(), price: z.number().min(0.01).optional() }).parse(req.body);
-  const off = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as any;
-  if (!off) throw new HttpError(404, 'Offer not found');
-  const integration = loadIntegration(off.integration_id);
+  const { off, integration } = editableOffer(id);
   const change = { ...b };
   if (integration.type === 'empik') {
     change.stock ??= off.stock;
@@ -409,7 +477,7 @@ offersRouter.post('/list', async (req, res) => {
       continue;
     }
     const price = marketplacePrice(offerBasePrice(p.id, integration.settings) ?? p.price, integration.settings);
-    const title = (b.title_template || '{name}').replace('{name}', p.name).replace('{sku}', p.sku).slice(0, 200);
+    const title = (b.title_template || '{name}').replaceAll('{name}', p.name).replaceAll('{sku}', p.sku).replaceAll('{ean}', p.ean).slice(0, 200);
     try {
       const o = await connector.createOffer({
         sku: p.sku,
@@ -464,11 +532,10 @@ offersRouter.post('/bulk-price', async (req, res) => {
   const b = z.object({ ids: z.array(z.number().int()).min(1).max(1000), percent: z.number().min(-90).max(500) }).parse(req.body);
   const errors: { id: number; error: string }[] = [];
   for (const id of b.ids) {
-    const off = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as any;
-    if (!off) continue;
-    const price = Math.round(off.price * (1 + b.percent / 100) * 100) / 100;
     try {
-      const integration = loadIntegration(off.integration_id);
+      const { off, integration } = editableOffer(id);
+      const price = Math.round(off.price * (1 + b.percent / 100) * 100) / 100;
+      if (price < 0.01) throw new HttpError(400, 'The price would be too low');
       await connectorFor(integration).updateOffer({ ...off, raw: parseJson(off.raw, {}) }, integration.type === 'empik' ? { price, stock: off.stock } : { price });
       db.prepare(`UPDATE offers SET price = ?, last_synced_at = datetime('now') WHERE id = ?`).run(price, id);
     } catch (e: any) {
